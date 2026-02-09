@@ -33,7 +33,7 @@
 
 ```cmd
 # 1. Download latest release or clone repo
-git clone https://github.com/yourusername/youtube-downloader-deno.git
+git clone https://github.com/wggriffiths/YouTube-Media-Downloader
 cd youtube-downloader-deno
 
 # 2. Compile binary
@@ -54,7 +54,7 @@ http://localhost:8000
 
 ```bash
 # 1. Clone repo
-git clone https://github.com/yourusername/youtube-downloader-deno.git
+git clone https://github.com/wggriffiths/YouTube-Media-Downloader
 cd youtube-downloader-deno
 
 # 2. Install dependencies (one-time)
