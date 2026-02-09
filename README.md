@@ -8,7 +8,7 @@
 
 **One-click deployment** • **Single binary** • **Auto-downloads dependencies** • **Modern UI**
 
-![[screenshot.png]]
+![YouTube Downloader Interface](screenshot.png)
 
 ---
 
