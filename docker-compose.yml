@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  ytdl:
+    build:
+      context: .
+      dockerfile: Dockerfile.deno
+    container_name: ytdl
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - DOWNLOAD_DIR=/app/downloads
+      - SEARCH_RESULTS=40
+      - YT_DLP_PATH=yt-dlp
+    volumes:
+      - ./downloads:/app/downloads
+      # Optional: Mount custom index.html
+      # - ./public/index.html:/app/public/index.html
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

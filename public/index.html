@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Downloader</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        :root {
+            --bg-primary: #0a0e1a;
+            --bg-secondary: #1a1f35;
+            --bg-card: #1e2340;
+            --text-primary: #e2e8f0;
+            --text-secondary: #94a3b8;
+            --accent-cyan: #22d3ee;
+            --accent-purple: #7c3aed;
+            --border-subtle: rgba(34, 211, 238, 0.1);
+            --success-green: #10b981;
+            --error-red: #ef4444;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        .hero {
+            text-align: center;
+            padding: 3rem 0;
+        }
+        
+        .hero-title {
+            font-size: 3rem;
+            font-weight: 800;
+            margin-bottom: 1rem;
+        }
+        
+        .hero-title .highlight {
+            background: linear-gradient(45deg, var(--accent-cyan), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .hero-subtitle {
+            font-size: 1.125rem;
+            color: var(--text-secondary);
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        
+        /* Search Section */
+        .search-section {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-subtle);
+            border-radius: 1rem;
+            padding: 2rem;
+            margin: 2rem 0;
+        }
+        
+        .search-form {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        .search-input {
+            flex: 1;
+            padding: 1rem 1.5rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: 0.75rem;
+            color: var(--text-primary);
+            font-size: 1rem;
+            transition: all 0.2s;
+        }
+        
+        .search-input:focus {
+            outline: none;
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.1);
+        }
+        
+        .btn {
+            padding: 1rem 2rem;
+            border: none;
+            border-radius: 0.75rem;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(45deg, var(--accent-cyan), var(--accent-purple));
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(34, 211, 238, 0.3);
+        }
+        
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        /* Format Options */
+        .format-options {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+        
+        .format-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .format-group label {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+        
+        .format-group select {
+            padding: 0.5rem 1rem;
+            background: var(--bg-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: 0.5rem;
+            color: var(--text-primary);
+            font-size: 0.9rem;
+        }
+        
+        /* Results */
+        #results {
+            margin-top: 2rem;
+        }
+        
+        .result-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-subtle);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            margin-bottom: 1rem;
+            display: flex;
+            gap: 1.5rem;
+            align-items: center;
+        }
+        
+        .result-thumbnail {
+            width: 180px;
+            height: 100px;
+            object-fit: cover;
+            border-radius: 0.5rem;
+        }
+        
+        .result-info {
+            flex: 1;
+        }
+        
+        .result-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            color: var(--text-primary);
+        }
+        
+        .result-meta {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+        
+        .result-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+        
+        .btn-small {
+            padding: 0.5rem 1rem;
+            font-size: 0.875rem;
+        }
+        
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .modal.show {
+            display: flex;
+        }
+        
+        .modal-content {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-subtle);
+            border-radius: 1rem;
+            padding: 2rem;
+            max-width: 500px;
+            width: 90%;
+        }
+        
+        .modal-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+        }
+        
+        .modal-status {
+            color: var(--text-secondary);
+            margin-bottom: 1.5rem;
+        }
+        
+        .progress-bar {
+            height: 8px;
+            background: var(--bg-card);
+            border-radius: 1rem;
+            overflow: hidden;
+            margin-bottom: 1.5rem;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-purple));
+            width: 0%;
+            transition: width 0.3s;
+        }
+        
+        .offline-notice {
+            text-align: center;
+            padding: 3rem;
+            color: var(--text-secondary);
+        }
+        
+        .offline-notice h2 {
+            color: var(--error-red);
+            margin-bottom: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="hero">
+            <h1 class="hero-title">
+                YouTube <span class="highlight">Downloader</span>
+            </h1>
+            <p class="hero-subtitle">
+                Download videos and playlists in high quality
+            </p>
+        </div>
+
+        <div class="search-section">
+            <form id="searchForm" class="search-form">
+                <input 
+                    type="text" 
+                    id="searchInput" 
+                    class="search-input" 
+                    placeholder="Paste YouTube URL or search for videos..."
+                    autocomplete="off"
+                >
+                <button type="submit" id="searchBtn" class="btn btn-primary">
+                    Search
+                </button>
+            </form>
+
+            <div class="format-options">
+                <div class="format-group">
+                    <label for="formatType">Format:</label>
+                    <select id="formatType">
+                        <option value="audio">Audio (MP3)</option>
+                        <option value="video">Video (MP4)</option>
+                    </select>
+                </div>
+                <div class="format-group" id="qualitySelector" style="display: none;">
+                    <label for="videoQuality">Quality:</label>
+                    <select id="videoQuality">
+                        <option value="1080">1080p</option>
+                        <option value="720">720p</option>
+                        <option value="480">480p</option>
+                        <option value="360">360p</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <div id="results"></div>
+    </div>
+
+    <!-- Download Modal -->
+    <div id="downloadModal" class="modal">
+        <div class="modal-content">
+            <h3 class="modal-title" id="modalTitle">Downloading...</h3>
+            <p class="modal-status" id="modalStatus">Preparing download...</p>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <div id="downloadLink"></div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const API_URL = window.location.origin; // API on same origin
+
+        // Elements
+        const searchForm = document.getElementById('searchForm');
+        const searchInput = document.getElementById('searchInput');
+        const searchBtn = document.getElementById('searchBtn');
+        const resultsDiv = document.getElementById('results');
+        const modal = document.getElementById('downloadModal');
+        const modalTitle = document.getElementById('modalTitle');
+        const modalStatus = document.getElementById('modalStatus');
+        const progressFill = document.getElementById('progressFill');
+        const downloadLink = document.getElementById('downloadLink');
+        const formatType = document.getElementById('formatType');
+        const videoQuality = document.getElementById('videoQuality');
+        const qualitySelector = document.getElementById('qualitySelector');
+
+        let currentJobId = null;
+        let statusCheckInterval = null;
+
+        // Show/hide quality selector
+        formatType.addEventListener('change', () => {
+            qualitySelector.style.display = formatType.value === 'video' ? 'flex' : 'none';
+        });
+
+        // URL detection patterns
+        const urlPatterns = [
+            /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//i,
+            /youtube\.com\/watch\?v=/i,
+            /youtube\.com\/playlist\?list=/i,
+            /youtu\.be\//i
+        ];
+
+        function isYouTubeUrl(text) {
+            return urlPatterns.some(pattern => pattern.test(text));
+        }
+
+        // Search form handler
+        searchForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const query = searchInput.value.trim();
+            if (!query) return;
+
+            // Check if it's a URL
+            if (isYouTubeUrl(query)) {
+                // Direct download
+                startDownload(query, 'Direct URL');
+                searchInput.value = '';
+                return;
+            }
+
+            // Search
+            searchBtn.disabled = true;
+            searchBtn.textContent = 'Searching...';
+            resultsDiv.innerHTML = '';
+
+            try {
+                const response = await fetch(`${API_URL}/search`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query })
+                });
+
+                const data = await response.json();
+
+                if (data && data.length > 0) {
+                    displayResults(data);
+                } else {
+                    resultsDiv.innerHTML = '<div class="offline-notice"><h2>No Results Found</h2><p>Try a different search query</p></div>';
+                }
+            } catch (error) {
+                resultsDiv.innerHTML = '<div class="offline-notice"><h2>Search Failed</h2><p>Please try again</p></div>';
+            } finally {
+                searchBtn.disabled = false;
+                searchBtn.textContent = 'Search';
+            }
+        });
+
+        function displayResults(results) {
+            const format = formatType.value;
+            const formatLabel = format === 'video' ? 'Video' : 'MP3';
+
+            let html = '';
+            results.forEach(result => {
+                html += `
+                    <div class="result-card">
+                        <img src="${result.thumbnail}" alt="${escapeHtml(result.title)}" class="result-thumbnail">
+                        <div class="result-info">
+                            <div class="result-title">${escapeHtml(result.title)}</div>
+                            <div class="result-meta">
+                                ${result.channel} • ${formatDuration(result.duration)}
+                            </div>
+                        </div>
+                        <div class="result-actions">
+                            <button class="btn btn-primary btn-small" onclick="startDownload('${result.url}', '${escapeHtml(result.title)}')">
+                                Download ${formatLabel}
+                            </button>
+                        </div>
+                    </div>
+                `;
+            });
+
+            resultsDiv.innerHTML = html;
+        }
+
+        async function startDownload(url, title) {
+            modal.classList.add('show');
+            modalTitle.textContent = title;
+            modalStatus.textContent = 'Starting download...';
+            progressFill.style.width = '0%';
+            downloadLink.innerHTML = '';
+
+            try {
+                const response = await fetch(`${API_URL}/download`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url: url,
+                        format_type: formatType.value,
+                        quality: videoQuality.value
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.job_id) {
+                    currentJobId = data.job_id;
+                    const isPlaylist = data.status === 'playlist';
+
+                    if (isPlaylist) {
+                        checkPlaylistStatus(currentJobId);
+                    } else {
+                        checkStatus(currentJobId);
+                    }
+                } else {
+                    modalStatus.textContent = 'Failed to start download';
+                }
+            } catch (error) {
+                modalStatus.textContent = 'Error: ' + error.message;
+            }
+        }
+
+        function checkStatus(jobId) {
+            if (statusCheckInterval) clearInterval(statusCheckInterval);
+
+            statusCheckInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`${API_URL}/status/${jobId}`);
+                    const data = await response.json();
+
+                    if (data.status === 'processing') {
+                        modalStatus.textContent = 'Downloading and converting...';
+                        progressFill.style.width = '50%';
+                    } else if (data.status === 'completed') {
+                        clearInterval(statusCheckInterval);
+                        modalStatus.textContent = 'Download complete!';
+                        progressFill.style.width = '100%';
+                        downloadLink.innerHTML = `
+                            <a href="${API_URL}/download/${jobId}" class="btn btn-primary" download>
+                                Download ${formatType.value === 'video' ? 'Video' : 'MP3'}
+                            </a>
+                        `;
+                    } else if (data.status === 'failed') {
+                        clearInterval(statusCheckInterval);
+                        modalStatus.textContent = 'Download failed: ' + (data.error || 'Unknown error');
+                        progressFill.style.width = '0%';
+                    }
+                } catch (error) {
+                    clearInterval(statusCheckInterval);
+                    modalStatus.textContent = 'Error checking status';
+                }
+            }, 2000);
+        }
+
+        function checkPlaylistStatus(jobId) {
+            if (statusCheckInterval) clearInterval(statusCheckInterval);
+
+            statusCheckInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`${API_URL}/status/playlist/${jobId}`);
+                    const data = await response.json();
+
+                    if (data.status === 'playlist') {
+                        const current = data.current_video || 0;
+                        const total = data.total_videos || 0;
+                        const title = data.current_title || '';
+
+                        modalStatus.textContent = `Downloading ${current}/${total}: ${title}`;
+                        progressFill.style.width = `${(current / total) * 100}%`;
+                    } else if (data.status === 'completed') {
+                        clearInterval(statusCheckInterval);
+                        modalStatus.textContent = 'Playlist download complete!';
+                        progressFill.style.width = '100%';
+                        downloadLink.innerHTML = `
+                            <a href="${API_URL}/download/playlist/${jobId}" class="btn btn-primary" download>
+                                Download Playlist (ZIP)
+                            </a>
+                        `;
+                    } else if (data.status === 'failed') {
+                        clearInterval(statusCheckInterval);
+                        modalStatus.textContent = 'Download failed: ' + (data.error || 'Unknown error');
+                        progressFill.style.width = '0%';
+                    }
+                } catch (error) {
+                    clearInterval(statusCheckInterval);
+                    modalStatus.textContent = 'Error checking status';
+                }
+            }, 2000);
+        }
+
+        // Close modal on click outside
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.classList.remove('show');
+                if (statusCheckInterval) clearInterval(statusCheckInterval);
+            }
+        });
+
+        // Utility functions
+        function formatDuration(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>

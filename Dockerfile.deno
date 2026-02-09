@@ -1,0 +1,33 @@
+FROM denoland/deno:alpine-1.40.2
+
+# Install yt-dlp and zip
+RUN apk add --no-cache \
+    python3 \
+    py3-pip \
+    ffmpeg \
+    zip \
+    && pip3 install --break-system-packages yt-dlp
+
+# Create app directory
+WORKDIR /app
+
+# Copy API source
+COPY api.ts .
+
+# Copy static frontend
+COPY index.html ./public/index.html
+
+# Create downloads directory
+RUN mkdir -p downloads public
+
+# Expose port
+EXPOSE 8000
+
+# Run with all required permissions
+CMD ["deno", "run", \
+     "--allow-net", \
+     "--allow-read", \
+     "--allow-write", \
+     "--allow-run", \
+     "--allow-env", \
+     "api.ts"]
