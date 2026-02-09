@@ -8,7 +8,7 @@
 
 **One-click deployment** • **Single binary** • **Auto-downloads dependencies** • **Modern UI**
 
-![[Pasted image 20260209113008.png]]
+![[screenshot.png]]
 
 ---
 
