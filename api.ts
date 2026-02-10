@@ -2,7 +2,7 @@
 
 /**
  * YouTube Downloader API - Deno/TypeScript Port
- * Version: 1.0.1
+ * Version: 1.0.2
  * 
  * COMPLETE FIX for playlist progress tracking and cross-platform compatibility
  * 
@@ -689,7 +689,7 @@ router.get("/", async (ctx) => {
   } catch (e) {
     ctx.response.body = {
       service: "YouTube Downloader API",
-      version: "1.0.1",
+      version: "1.0.2",
       status: "online",
       message: "Frontend not found. Deploy index.html to ./public/",
     };
@@ -699,7 +699,7 @@ router.get("/", async (ctx) => {
 router.get("/health", (ctx) => {
   ctx.response.body = {
     service: "YouTube Downloader API",
-    version: "1.0.1",
+    version: "1.0.2",
     status: "online",
   };
 });
@@ -910,7 +910,7 @@ app.use(router.allowedMethods());
 
 async function main() {
   logInfo("═".repeat(80));
-  logInfo("YouTube Downloader API v1.0.1");
+  logInfo("YouTube Downloader API v1.0.2");
   logInfo("═".repeat(80));
   
   await Deno.mkdir(DOWNLOAD_DIR, { recursive: true });
