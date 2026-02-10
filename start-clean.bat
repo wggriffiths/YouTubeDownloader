@@ -24,7 +24,7 @@ if exist "%PPATH%ytdl.exe" goto :have_ytdl
 
 echo [*] Downloading ytdl.exe from GitHub...
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; $url='https://github.com/wggriffiths/YouTube-Media-Downloader/releases/download/v1.0.0/ytdl-windows-x64.exe'; Write-Host '[*] Downloading...'; Invoke-WebRequest -Uri $url -OutFile '%PPATH%ytdl.exe' -UseBasicParsing; if (Test-Path '%PPATH%ytdl.exe') { Write-Host '[+] Downloaded ytdl.exe' } else { exit 1 }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; $url='https://github.com/wggriffiths/YouTube-Media-Downloader/releases/download/v1.0.1/ytdl-windows-x64.exe'; Write-Host '[*] Downloading...'; Invoke-WebRequest -Uri $url -OutFile '%PPATH%ytdl.exe' -UseBasicParsing; if (Test-Path '%PPATH%ytdl.exe') { Write-Host '[+] Downloaded ytdl.exe' } else { exit 1 }"
 
 if errorlevel 1 (
     echo [!] Download failed
