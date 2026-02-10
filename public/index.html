@@ -12,8 +12,8 @@
         }
         
         :root {
-            --bg-primary: #0a0e1a;
-            --bg-secondary: #1a1f35;
+            --bg-primary: #0f1419;
+            --bg-secondary: #1a1f2e;
             --bg-card: #1e2340;
             --text-primary: #e2e8f0;
             --text-secondary: #94a3b8;
@@ -63,7 +63,6 @@
             margin: 0 auto;
         }
         
-        /* Search Section */
         .search-section {
             background: var(--bg-secondary);
             border: 1px solid var(--border-subtle);
@@ -121,7 +120,6 @@
             transform: none;
         }
         
-        /* Format Options */
         .format-options {
             display: flex;
             gap: 1rem;
@@ -148,12 +146,11 @@
             font-size: 0.9rem;
         }
         
-        /* Results */
         #results {
             margin-top: 2rem;
         }
         
-        .result-card {
+        .result-item {
             background: var(--bg-secondary);
             border: 1px solid var(--border-subtle);
             border-radius: 0.75rem;
@@ -164,15 +161,17 @@
             align-items: center;
         }
         
-        .result-thumbnail {
-            width: 180px;
-            height: 100px;
+        .result-thumb {
+            width: 160px;
+            height: 90px;
             object-fit: cover;
             border-radius: 0.5rem;
+            flex-shrink: 0;
         }
         
         .result-info {
             flex: 1;
+            min-width: 0;
         }
         
         .result-title {
@@ -185,19 +184,53 @@
         .result-meta {
             color: var(--text-secondary);
             font-size: 0.875rem;
+            display: flex;
+            gap: 1rem;
+        }
+        
+        .result-duration {
+            color: var(--accent-cyan);
         }
         
         .result-actions {
             display: flex;
             gap: 0.5rem;
+            flex-shrink: 0;
         }
         
-        .btn-small {
+        .btn-play {
             padding: 0.5rem 1rem;
+            background: rgba(34, 211, 238, 0.1);
+            border: 1px solid var(--accent-cyan);
+            color: var(--accent-cyan);
+            border-radius: 0.5rem;
+            cursor: pointer;
             font-size: 0.875rem;
+            font-weight: 600;
+            transition: all 0.2s;
         }
         
-        /* Modal */
+        .btn-play:hover {
+            background: rgba(34, 211, 238, 0.2);
+        }
+        
+        .btn-download {
+            padding: 0.5rem 1rem;
+            background: linear-gradient(45deg, var(--accent-cyan), var(--accent-purple));
+            border: none;
+            color: white;
+            border-radius: 0.5rem;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        
+        .btn-download:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(34, 211, 238, 0.3);
+        }
+        
         .modal {
             display: none;
             position: fixed;
@@ -224,6 +257,63 @@
             width: 90%;
         }
         
+        .modal-content.video-player {
+            max-width: 900px;
+            width: 90%;
+        }
+        
+        .video-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        
+        .video-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .btn-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 2rem;
+            cursor: pointer;
+            padding: 0;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 0.5rem;
+            transition: all 0.2s;
+        }
+        
+        .btn-close:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+        }
+        
+        .video-container {
+            position: relative;
+            width: 100%;
+            padding-bottom: 56.25%;
+            background: #000;
+            border-radius: 0.5rem;
+            overflow: hidden;
+        }
+        
+        .video-container iframe {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+        
         .modal-title {
             font-size: 1.5rem;
             font-weight: 700;
@@ -233,6 +323,36 @@
         .modal-status {
             color: var(--text-secondary);
             margin-bottom: 1.5rem;
+        }
+        
+        .playlist-progress {
+            text-align: center;
+            margin-bottom: 1rem;
+        }
+
+        .track-info {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .current-track {
+            font-size: 0.9rem;
+            color: var(--accent-cyan);
+            margin-top: 0.5rem;
+            font-style: italic;
+        }
+
+        .file-count {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-top: 0.5rem;
+        }
+
+        .success {
+            color: var(--success-green);
+            font-weight: 600;
+            font-size: 1.1rem;
         }
         
         .progress-bar {
@@ -259,6 +379,27 @@
         .offline-notice h2 {
             color: var(--error-red);
             margin-bottom: 1rem;
+        }
+        
+        @media (max-width: 768px) {
+            .result-item {
+                flex-direction: column;
+            }
+            
+            .result-thumb {
+                width: 100%;
+                height: auto;
+            }
+            
+            .result-actions {
+                width: 100%;
+                flex-direction: column;
+            }
+            
+            .btn-play,
+            .btn-download {
+                width: 100%;
+            }
         }
     </style>
 </head>
@@ -310,7 +451,6 @@
         <div id="results"></div>
     </div>
 
-    <!-- Download Modal -->
     <div id="downloadModal" class="modal">
         <div class="modal-content">
             <h3 class="modal-title" id="modalTitle">Downloading...</h3>
@@ -322,16 +462,25 @@
         </div>
     </div>
 
-    <script>
-        // Configuration
-        const API_URL = window.location.origin; // API on same origin
+    <div id="videoModal" class="modal">
+        <div class="modal-content video-player">
+            <div class="video-header">
+                <div class="video-title" id="videoTitle"></div>
+                <button class="btn-close" id="closeVideo">&times;</button>
+            </div>
+            <div class="video-container">
+                <iframe id="videoPlayer" src="" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+            </div>
+        </div>
+    </div>
 
-        // Elements
+    <script>
+        const API_URL = window.location.origin;
         const searchForm = document.getElementById('searchForm');
         const searchInput = document.getElementById('searchInput');
         const searchBtn = document.getElementById('searchBtn');
         const resultsDiv = document.getElementById('results');
-        const modal = document.getElementById('downloadModal');
+        const downloadModal = document.getElementById('downloadModal');
         const modalTitle = document.getElementById('modalTitle');
         const modalStatus = document.getElementById('modalStatus');
         const progressFill = document.getElementById('progressFill');
@@ -339,16 +488,49 @@
         const formatType = document.getElementById('formatType');
         const videoQuality = document.getElementById('videoQuality');
         const qualitySelector = document.getElementById('qualitySelector');
+        const videoModal = document.getElementById('videoModal');
+        const videoTitle = document.getElementById('videoTitle');
+        const videoPlayer = document.getElementById('videoPlayer');
+        const closeVideo = document.getElementById('closeVideo');
 
-        let currentJobId = null;
         let statusCheckInterval = null;
 
-        // Show/hide quality selector
         formatType.addEventListener('change', () => {
             qualitySelector.style.display = formatType.value === 'video' ? 'flex' : 'none';
         });
 
-        // URL detection patterns
+        function extractVideoId(url) {
+            const patterns = [
+                /(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\n?#]+)/,
+                /youtube\.com\/embed\/([^&\n?#]+)/,
+                /youtube\.com\/v\/([^&\n?#]+)/,
+            ];
+            
+            for (const pattern of patterns) {
+                const match = url.match(pattern);
+                if (match && match[1]) return match[1];
+            }
+            return '';
+        }
+
+        function playVideo(videoId, title) {
+            videoTitle.textContent = title;
+            videoPlayer.src = `https://www.youtube.com/embed/${videoId}?autoplay=1`;
+            videoModal.classList.add('show');
+        }
+
+        closeVideo.addEventListener('click', () => {
+            videoModal.classList.remove('show');
+            videoPlayer.src = '';
+        });
+
+        videoModal.addEventListener('click', (e) => {
+            if (e.target === videoModal) {
+                videoModal.classList.remove('show');
+                videoPlayer.src = '';
+            }
+        });
+
         const urlPatterns = [
             /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//i,
             /youtube\.com\/watch\?v=/i,
@@ -360,21 +542,17 @@
             return urlPatterns.some(pattern => pattern.test(text));
         }
 
-        // Search form handler
         searchForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const query = searchInput.value.trim();
             if (!query) return;
 
-            // Check if it's a URL
             if (isYouTubeUrl(query)) {
-                // Direct download
                 startDownload(query, 'Direct URL');
                 searchInput.value = '';
                 return;
             }
 
-            // Search
             searchBtn.disabled = true;
             searchBtn.textContent = 'Searching...';
             resultsDiv.innerHTML = '';
@@ -407,17 +585,23 @@
 
             let html = '';
             results.forEach(result => {
+                const videoId = extractVideoId(result.url);
+                
                 html += `
-                    <div class="result-card">
-                        <img src="${result.thumbnail}" alt="${escapeHtml(result.title)}" class="result-thumbnail">
+                    <div class="result-item">
+                        <img src="${result.thumbnail}" alt="${escapeHtml(result.title)}" class="result-thumb">
                         <div class="result-info">
                             <div class="result-title">${escapeHtml(result.title)}</div>
                             <div class="result-meta">
-                                ${result.channel} • ${formatDuration(result.duration)}
+                                <span>${escapeHtml(result.channel)}</span>
+                                <span class="result-duration">${formatDuration(result.duration)}</span>
                             </div>
                         </div>
                         <div class="result-actions">
-                            <button class="btn btn-primary btn-small" onclick="startDownload('${result.url}', '${escapeHtml(result.title)}')">
+                            <button class="btn-play" data-video-id="${escapeHtml(videoId)}" data-title="${escapeHtml(result.title)}">
+                                ▶ Play
+                            </button>
+                            <button class="btn-download" data-url="${escapeHtml(result.url)}" data-title="${escapeHtml(result.title)}">
                                 Download ${formatLabel}
                             </button>
                         </div>
@@ -426,10 +610,26 @@
             });
 
             resultsDiv.innerHTML = html;
+
+            document.querySelectorAll('.btn-play').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const videoId = this.getAttribute('data-video-id');
+                    const title = this.getAttribute('data-title');
+                    playVideo(videoId, title);
+                });
+            });
+
+            document.querySelectorAll('.btn-download').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const url = this.getAttribute('data-url');
+                    const title = this.getAttribute('data-title');
+                    startDownload(url, title);
+                });
+            });
         }
 
         async function startDownload(url, title) {
-            modal.classList.add('show');
+            downloadModal.classList.add('show');
             modalTitle.textContent = title;
             modalStatus.textContent = 'Starting download...';
             progressFill.style.width = '0%';
@@ -449,13 +649,10 @@
                 const data = await response.json();
 
                 if (data.job_id) {
-                    currentJobId = data.job_id;
-                    const isPlaylist = data.status === 'playlist';
-
-                    if (isPlaylist) {
-                        checkPlaylistStatus(currentJobId);
+                    if (data.status === 'playlist') {
+                        checkPlaylistStatus(data.job_id);
                     } else {
-                        checkStatus(currentJobId);
+                        checkStatus(data.job_id);
                     }
                 } else {
                     modalStatus.textContent = 'Failed to start download';
@@ -506,42 +703,59 @@
                     const data = await response.json();
 
                     if (data.status === 'playlist') {
-                        const current = data.current_video || 0;
-                        const total = data.total_videos || 0;
-                        const title = data.current_title || '';
-
-                        modalStatus.textContent = `Downloading ${current}/${total}: ${title}`;
-                        progressFill.style.width = `${(current / total) * 100}%`;
-                    } else if (data.status === 'completed') {
+                        let statusHTML = '<div class="playlist-progress">';
+                        
+                        if (data.current_video && data.total_videos) {
+                            statusHTML += `<div class="track-info">Track ${data.current_video} of ${data.total_videos}</div>`;
+                        }
+                        
+                        if (data.current_title) {
+                            statusHTML += `<div class="current-track">"${data.current_title}"</div>`;
+                        }
+                        
+                        statusHTML += '</div>';
+                        modalStatus.innerHTML = statusHTML;
+                        
+                        if (data.total_videos > 0) {
+                            const progress = (data.current_video / data.total_videos) * 100;
+                            progressFill.style.width = `${progress}%`;
+                        }
+                    } 
+                    else if (data.status === 'completed') {
                         clearInterval(statusCheckInterval);
-                        modalStatus.textContent = 'Playlist download complete!';
+                        const fileCount = data.video_titles?.length || 0;
+                        
+                        modalStatus.innerHTML = `
+                            <div class="success">✓ Download Complete!</div>
+                            <div class="file-count">${fileCount} file${fileCount !== 1 ? 's' : ''} ready</div>
+                        `;
+                        
                         progressFill.style.width = '100%';
+                        
                         downloadLink.innerHTML = `
                             <a href="${API_URL}/download/playlist/${jobId}" class="btn btn-primary" download>
-                                Download Playlist (ZIP)
+                                Download ZIP (${fileCount} files)
                             </a>
                         `;
-                    } else if (data.status === 'failed') {
+                    } 
+                    else if (data.status === 'failed') {
                         clearInterval(statusCheckInterval);
                         modalStatus.textContent = 'Download failed: ' + (data.error || 'Unknown error');
                         progressFill.style.width = '0%';
                     }
                 } catch (error) {
-                    clearInterval(statusCheckInterval);
-                    modalStatus.textContent = 'Error checking status';
+                    console.error('Status check failed:', error);
                 }
-            }, 2000);
+            }, 1000);
         }
 
-        // Close modal on click outside
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal) {
-                modal.classList.remove('show');
+        downloadModal.addEventListener('click', (e) => {
+            if (e.target === downloadModal) {
+                downloadModal.classList.remove('show');
                 if (statusCheckInterval) clearInterval(statusCheckInterval);
             }
         });
 
-        // Utility functions
         function formatDuration(seconds) {
             const mins = Math.floor(seconds / 60);
             const secs = seconds % 60;
