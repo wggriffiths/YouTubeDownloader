@@ -723,7 +723,7 @@
                     } 
                     else if (data.status === 'completed') {
                         clearInterval(statusCheckInterval);
-                        const fileCount = data.video_titles?.length || 0;
+                        const fileCount = data.total_videos || 0;
                         
                         modalStatus.innerHTML = `
                             <div class="success">✓ Download Complete!</div>

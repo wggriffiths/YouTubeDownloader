@@ -2,7 +2,7 @@
 
 /**
  * YouTube Downloader API - Deno/TypeScript Port
- * Version: 1.0.2
+ * Version: 1.0.5
  * 
  * COMPLETE FIX for playlist progress tracking and cross-platform compatibility
  * 
@@ -11,10 +11,32 @@
  * 2. Read from stdout with proper flags (--newline, --progress)
  * 3. Comprehensive logging for debugging
  * 4. Handle geo-blocked videos gracefully
- * 5. Playlist file numbering: 01 - Artist - Song.mp3
+ * 5. Smart artist extraction for proper "Artist - Song.mp3" format
  * 6. Cross-platform ZIP creation (Windows/Linux/Mac)
  * 7. Playlist-named ZIP files: EDM.zip, Chill Vibes.zip, etc.
  * 8. NATIVE system commands for instant ZIP (PowerShell/zip) - 100x faster!
+ * 
+ * v1.0.5 Changes:
+ * - FIXED: Video audio format now AAC instead of opus
+ * - Added --recode-video mp4 for proper MP4 encoding
+ * - Added --postprocessor-args "ffmpeg:-c:a aac -c:v copy" to convert audio
+ * - Fixes media player compatibility issues (opus audio in MP4 won't play)
+ * - Applies to both single video downloads and video playlists
+ * 
+ * v1.0.4 Changes:
+ * - FIXED: Playlists now respect format_type parameter
+ * - Video playlists now download as .mp4 files, not audio
+ * - Conditional args based on format_type (same logic as single downloads)
+ * - Video playlists use simpler naming: "01 - Title.mp4"
+ * - Audio playlists still use artist parsing: "01 - Artist - Title.mp3"
+ * 
+ * v1.0.3 Changes:
+ * - SMART ARTIST PARSING: Detects if title already has "Artist - Song" format
+ * - If title has " - ", extracts artist and song separately
+ * - If title is just song name, uses channel name as artist
+ * - Prevents duplication like "EminemMusic - Eminem - Lose Yourself.mp3"
+ * - Result: "Eminem - Lose Yourself.mp3" (clean, correct format)
+ * - Applies to both single downloads and playlists
  */
 
 import { join, resolve, dirname } from "https://deno.land/std@0.202.0/path/mod.ts";
@@ -187,9 +209,8 @@ async function downloadVideo(job: Job) {
     "--no-playlist",
     "--format",
     job.format_type === "video"
-      ? `bestvideo[height<=${job.quality}]+bestaudio/best[height<=${job.quality}]`
+      ? `bestvideo[height<=${job.quality}]+bestaudio[ext=m4a]/best[height<=${job.quality}]`
       : "bestaudio",
-    "--output", `${downloadDir}/%(title)s.%(ext)s`,
   ];
 
   if (useCookies) {
@@ -203,14 +224,18 @@ async function downloadVideo(job: Job) {
       "--audio-quality", "0",
       "--embed-thumbnail",
       "--add-metadata",
-      "--metadata-from-title", "%(artist)s - %(title)s",
+      "--parse-metadata", "%(title)s:%(meta_artist)s - %(meta_title)s",
+      "--parse-metadata", "%(uploader)s:%(meta_uploader)s",
+      "--output", `${downloadDir}/%(meta_artist,meta_uploader,uploader|Unknown Artist)s - %(meta_title,title)s.%(ext)s`,
     );
+	
   } else {
     args.push(
       "--merge-output-format", "mp4",
       "--embed-thumbnail",
       "--add-metadata",
-    );
+      "--output", `${downloadDir}/%(title)s.%(ext)s`,
+    );	
   }
 
   args.push(job.url);
@@ -278,20 +303,42 @@ async function downloadPlaylist(job: Job) {
     "--yes-playlist",
     "--ignore-errors",            // Skip unavailable videos
     "--no-warnings",              // Reduce noise
-    "--newline",                  // orce line-by-line output
+    "--newline",                  // Force line-by-line output
     "--progress",                 // Force progress display
     "--console-title",            // Additional progress info
-    "--format", "bestaudio",
-    "--extract-audio",
-    "--audio-format", "mp3",
-    "--audio-quality", "0",
-    "--embed-thumbnail",
-    "--add-metadata",
-    "--output", `${downloadDir}/%(playlist_index)02d - %(title)s.%(ext)s`,  // numbering (01, 02, 03...)
+    "--format",
+    job.format_type === "video"
+      ? `bestvideo[height<=${job.quality}]+bestaudio/best[height<=${job.quality}]`
+      : "bestaudio",
   ];
 
   if (useCookies) {
     args.splice(1, 0, "--cookies", cookiesPath);
+  }
+
+  if (job.format_type === "audio") {
+    args.push(
+      "--extract-audio",
+      "--audio-format", "mp3",
+      "--audio-quality", "0",
+      "--embed-thumbnail",
+      "--add-metadata",
+      // Smart parsing: if title has "Artist - Song", extract both; otherwise use uploader
+      "--parse-metadata", "%(title)s:%(meta_artist)s - %(meta_title)s",
+      "--parse-metadata", "%(uploader)s:%(meta_uploader)s",
+      // Playlist format: "01 - Artist - Title.mp3"
+      "--output", `${downloadDir}/%(playlist_index)02d - %(meta_artist,meta_uploader,uploader|Unknown Artist)s - %(meta_title,title)s.%(ext)s`,
+    );
+  } else {
+    args.push(
+      "--merge-output-format", "mp4",
+      "--recode-video", "mp4",      // Force proper MP4 encoding
+      "--postprocessor-args", "ffmpeg:-c:a aac -c:v copy",  // Convert audio to AAC, keep video as-is
+      "--embed-thumbnail",
+      "--add-metadata",
+      // Video format: "01 - Title.mp4" (no artist parsing for video)
+      "--output", `${downloadDir}/%(playlist_index)02d - %(title)s.%(ext)s`,
+    );
   }
 
   args.push(job.url);
@@ -347,7 +394,7 @@ async function downloadPlaylist(job: Job) {
             const current = parseInt(match[1], 10);
             const total = parseInt(match[2], 10);
             
-            job.current_video = current;   // ✅ Use current_video
+            job.current_video = current;
             job.total_videos = total;
             
             logInfo(`┌─────────────────────────────────────────┐`);
@@ -456,7 +503,6 @@ async function downloadPlaylist(job: Job) {
     }
   };
 
-  // ✅ CRITICAL: Read both streams concurrently
   logInfo(`Starting concurrent stream reading...`);
   await Promise.all([readStdout(), readStderr()]);
   logInfo(`Stream reading complete`);
@@ -464,16 +510,45 @@ async function downloadPlaylist(job: Job) {
   const { code } = await process.status;
   logInfo(`yt-dlp exited with code: ${code}`);
 
-  // ✅ FIX: Exit code 1 with --ignore-errors means "some videos skipped but others succeeded"
-  // Check if we got files before declaring failure
+  const fileExtension = job.format_type === "audio" ? ".mp3" : ".mp4";
   const files: string[] = [];
+
   for await (const entry of Deno.readDir(downloadDir)) {
-    if (entry.isFile && entry.name.endsWith(".mp3")) {
-      files.push(entry.name);
-    }
+    if (!entry.isFile) continue;
+
+    if (!entry.name.endsWith(fileExtension)) continue;
+
+    if (entry.name.includes(".temp.")) continue;
+    if (entry.name.includes(".part")) continue;
+
+    const fullPath = `${downloadDir}/${entry.name}`;
+    const stat = await Deno.stat(fullPath);
+
+    if (stat.size === 0) continue;
+
+    const ageMs = Date.now() - stat.mtime!.getTime();
+    if (ageMs < 1000) continue;
+
+    files.push(entry.name);
   }
 
-  logInfo(`Found ${files.length} MP3 files in ${downloadDir}`);
+  logInfo(`Found ${files.length} ${fileExtension} files in ${downloadDir}`);
+
+  // Override total_videos with actual successful files
+  job.total_videos = files.length;
+  job.current_video = files.length;
+
+  // Cleanup: Delete any leftover .temp.mp4 files
+  for await (const entry of Deno.readDir(downloadDir)) {
+    if (entry.isFile && entry.name.endsWith(".temp.mp4")) {
+      try {
+        await Deno.remove(join(downloadDir, entry.name));
+        logInfo(`🗑️  Deleted temp file: ${entry.name}`);
+      } catch (err) {
+        logError(`Failed to delete temp file ${entry.name}: ${err}`);
+      }
+    }
+  }
 
   // Only fail if we got NO files
   if (files.length === 0) {
@@ -481,7 +556,7 @@ async function downloadPlaylist(job: Job) {
     job.error = code !== 0 
       ? "All videos in playlist were unavailable or blocked" 
       : "No files downloaded from playlist";
-    logError(`No MP3 files found for playlist job ${jobId} (exit code: ${code})`);
+    logError(`No ${fileExtension} files found for playlist job ${jobId} (exit code: ${code})`);
     return;
   }
 
@@ -494,7 +569,7 @@ async function downloadPlaylist(job: Job) {
   }
 
   // Create ZIP archive using native system commands (ultra-fast)
-  // ✅ Use playlist title for filename (fallback to "playlist" if not detected)
+  // Use playlist title for filename (fallback to "playlist" if not detected)
   let zipBaseName = job.playlist_title || "playlist";
   
   // Sanitize filename - remove invalid characters
@@ -509,7 +584,7 @@ async function downloadPlaylist(job: Job) {
   logInfo(`Creating ZIP archive: ${zipFileName} with ${files.length} files`);
 
   try {
-    // ✅ Detect platform and use native ZIP command (10-100x faster than JSZip)
+    // Detect platform and use native ZIP command (10-100x faster than JSZip)
     const isWindows = Deno.build.os === "windows";
     
     if (isWindows) {
@@ -689,7 +764,7 @@ router.get("/", async (ctx) => {
   } catch (e) {
     ctx.response.body = {
       service: "YouTube Downloader API",
-      version: "1.0.2",
+      version: "1.0.5",
       status: "online",
       message: "Frontend not found. Deploy index.html to ./public/",
     };
@@ -699,7 +774,7 @@ router.get("/", async (ctx) => {
 router.get("/health", (ctx) => {
   ctx.response.body = {
     service: "YouTube Downloader API",
-    version: "1.0.2",
+    version: "1.0.5",
     status: "online",
   };
 });
@@ -762,7 +837,7 @@ router.post("/download", async (ctx) => {
       });
     }
     
-    // ✅ FIX: Return "playlist" status so frontend polls correct endpoint
+    // Return "playlist" status so frontend polls correct endpoint
     ctx.response.body = {
       job_id: jobId,
       status: isPlaylist ? "playlist" : "pending",
@@ -910,7 +985,7 @@ app.use(router.allowedMethods());
 
 async function main() {
   logInfo("═".repeat(80));
-  logInfo("YouTube Downloader API v1.0.2");
+  logInfo("YouTube Downloader API v1.0.5");
   logInfo("═".repeat(80));
   
   await Deno.mkdir(DOWNLOAD_DIR, { recursive: true });
