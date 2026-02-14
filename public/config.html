@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Downloader - Configuration</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --bg-primary: #0a0e1a; --bg-secondary: #1a1f35; --bg-card: #141827;
+            --accent-cyan: #22d3ee; --accent-green: #10b981; --accent-red: #ef4444;
+            --accent-amber: #f59e0b; --text-primary: #e2e8f0; --text-secondary: #94a3b8;
+            --border-subtle: rgba(148, 163, 184, 0.2);
+        }
+        body { font-family: 'Segoe UI', sans-serif; background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%); min-height: 100vh; color: var(--text-primary); }
+        .header { position: sticky; top: 0; z-index: 1000; background: var(--bg-secondary); border-bottom: 1px solid var(--border-subtle); padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3); }
+        .logo { font-size: 1.5rem; font-weight: 700; background: linear-gradient(135deg, var(--accent-cyan), #7c3aed); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .header-actions { display: flex; gap: 0.75rem; align-items: center; }
+        .btn { padding: 0.75rem 1.5rem; border-radius: 0.5rem; font-weight: 600; cursor: pointer; transition: all 0.3s ease; border: none; text-decoration: none; display: inline-block; font-size: 0.95rem; }
+        .btn-primary { background: linear-gradient(135deg, var(--accent-green), #059669); color: white; }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(16, 185, 129, 0.3); }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        .btn-secondary { background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border-subtle); }
+        .btn-secondary:hover { border-color: var(--accent-cyan); }
+        .btn-warning { background: linear-gradient(135deg, var(--accent-amber), #d97706); color: white; }
+        .nav { background: var(--bg-secondary); border-bottom: 1px solid var(--border-subtle); padding: 0 2rem; display: flex; gap: 2rem; }
+        .nav-link { padding: 1rem 0; color: var(--text-secondary); text-decoration: none; border-bottom: 2px solid transparent; transition: all 0.3s ease; cursor: pointer; }
+        .nav-link:hover { color: var(--text-primary); }
+        .nav-link.active { color: var(--accent-cyan); border-bottom-color: var(--accent-cyan); }
+        .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+        .message { padding: 1rem; border-radius: 0.75rem; margin-bottom: 1.5rem; font-weight: 500; white-space: pre-wrap; }
+        .message.success { background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); color: var(--accent-green); }
+        .message.error { background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: var(--accent-red); }
+        .tabs { display: flex; gap: 1rem; margin-bottom: 2rem; border-bottom: 1px solid var(--border-subtle); }
+        .tab { padding: 1rem 1.5rem; background: none; border: none; color: var(--text-secondary); cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.3s ease; font-size: 0.95rem; font-weight: 500; }
+        .tab:hover { color: var(--text-primary); }
+        .tab.active { color: var(--accent-cyan); border-bottom-color: var(--accent-cyan); }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .form-group { margin-bottom: 1.5rem; }
+        .form-label { display: block; font-size: 0.9rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 0.5rem; }
+        .form-input, .form-select { width: 100%; padding: 0.75rem 1rem; background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 0.5rem; color: var(--text-primary); font-size: 1rem; transition: all 0.3s ease; font-family: 'Consolas', monospace; }
+        .form-input:focus, .form-select:focus { outline: none; border-color: var(--accent-cyan); background: rgba(15, 23, 42, 0.8); }
+        .form-hint { font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.5rem; }
+        .card { background: rgba(26, 31, 53, 0.6); border: 1px solid var(--border-subtle); border-radius: 1rem; padding: 1.5rem; margin-bottom: 1.5rem; }
+        .card-title { font-size: 1.1rem; font-weight: 600; margin-bottom: 1.5rem; color: var(--accent-cyan); }
+        .maintenance-group { display: flex; gap: 1rem; align-items: end; }
+        .maintenance-group .form-group { flex: 1; margin-bottom: 0; }
+        .logs-container { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 0.75rem; padding: 1rem; height: 500px; overflow-y: auto; font-family: 'Consolas', 'Monaco', monospace; font-size: 0.85rem; margin-top: 1rem; }
+        .log-line { padding: 0.25rem 0; border-bottom: 1px solid rgba(148, 163, 184, 0.05); white-space: pre-wrap; word-break: break-all; }
+        .log-line.error { color: var(--accent-red); }
+        .log-line.warning { color: var(--accent-amber); }
+        .log-line.info { color: var(--accent-cyan); }
+        .log-line.success { color: var(--accent-green); }
+        .logs-controls { display: flex; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: center; }
+        .logs-stats { display: flex; gap: 2rem; margin-bottom: 1rem; }
+        .stat { text-align: center; }
+        .stat-value { font-size: 1.5rem; font-weight: 700; color: var(--accent-cyan); }
+        .stat-label { font-size: 0.8rem; color: var(--text-secondary); }
+        .view { display: none; }
+        .view.active { display: block; }
+        .btn-sm { padding: 0.5rem 1rem; font-size: 0.85rem; }
+        .form-input:read-only { background: rgba(20, 24, 39, 0.5); color: var(--text-secondary); cursor: not-allowed; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="logo">YouTube Downloader</div>
+        <div class="header-actions">
+            <button id="saveBtn" class="btn btn-primary">💾 Save Changes</button>
+            <a href="/" class="btn btn-secondary">Home</a>
+            <button class="btn btn-secondary" onclick="logout()">Logout</button>
+        </div>
+    </div>
+    <div class="nav">
+        <a href="/" class="nav-link">Home</a>
+        <span class="nav-link active" data-view="config">Configuration</span>
+        <span class="nav-link" data-view="logs">Logs</span>
+    </div>
+    <div class="container">
+        <div id="message"></div>
+        <div id="configView" class="view active">
+            <div class="tabs">
+                <button class="tab active" data-tab="limits">Limits</button>
+                <button class="tab" data-tab="files">Files</button>
+                <button class="tab" data-tab="maintenance">Maintenance</button>
+            </div>
+            <div class="tab-content active" data-content="limits">
+                <div class="card">
+                    <div class="card-title">Download Limits</div>
+                    <div class="form-group">
+                        <label class="form-label">Search Results</label>
+                        <input type="number" id="search_results" class="form-input" min="1" max="100">
+                        <div class="form-hint">Number of search results to return (1-100)</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Max Duration (seconds)</label>
+                        <input type="number" id="max_duration" class="form-input" min="1" max="7200">
+                        <div class="form-hint">Maximum video duration in seconds (1-7200)</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Max File Size (MB)</label>
+                        <input type="number" id="max_file_size" class="form-input" min="1" max="5000">
+                        <div class="form-hint">Maximum file size in megabytes (1-5000)</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">ID3 Comment</label>
+                        <input type="text" id="id3_comment" class="form-input">
+                        <div class="form-hint">Comment to embed in MP3 metadata</div>
+                    </div>
+                </div>
+            </div>
+            <div class="tab-content" data-content="files">
+                <div class="card">
+                    <div class="card-title">File Paths (read only)</div>
+                    <div class="form-group">
+                        <label class="form-label">Download Directory</label>
+                        <input type="text" id="download_dir" class="form-input" readonly>
+                        <div class="form-hint">Absolute path to download directory</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Cookie File</label>
+                        <input type="text" id="cookie_file" class="form-input" readonly>
+                        <div class="form-hint">Path to cookies.txt file (optional)</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">yt-dlp Path (from YT_DLP_PATH env)</label>
+                        <input type="text" id="ytdlp_path" class="form-input" readonly>
+                        <div class="form-hint">Path loaded from YT_DLP_PATH environment variable (read-only, restart server to change)</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Deno Path</label>
+                        <input type="text" id="deno_path" class="form-input" readonly>
+                        <div class="form-hint">Path to Deno executable</div>
+                    </div>
+                </div>
+            </div>
+            <div class="tab-content" data-content="maintenance">
+                <div class="card">
+                    <div class="card-title">System Maintenance</div>
+                    <div class="maintenance-group">
+                        <div class="form-group">
+                            <label class="form-label">yt-dlp Version</label>
+                            <input type="text" id="ytdlp_version" class="form-input" readonly>
+                            <div class="form-hint">Current yt-dlp version</div>
+                        </div>
+                        <button class="btn btn-warning" onclick="updateYtdlp()">Update yt-dlp</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div id="logsView" class="view">
+            <div class="card">
+                <div class="card-title">Application Logs</div>
+                <div class="logs-stats">
+                    <div class="stat"><div class="stat-value" id="totalLines">0</div><div class="stat-label">Total Lines</div></div>
+                    <div class="stat"><div class="stat-value" id="errorCount">0</div><div class="stat-label">Errors</div></div>
+                    <div class="stat"><div class="stat-value" id="warnCount">0</div><div class="stat-label">Warnings</div></div>
+                </div>
+                <div class="logs-controls">
+                    <select id="logLines" class="form-select" style="width: auto;"><option value="50">50</option><option value="100" selected>100</option><option value="500">500</option></select>
+                    <select id="logFilter" class="form-select" style="width: auto;"><option value="all">All</option><option value="error">Errors</option><option value="warning">Warnings</option><option value="info">Info</option></select>
+                    <button class="btn btn-secondary btn-sm" onclick="refreshLogs()">Refresh</button>
+                    <button class="btn btn-secondary btn-sm" onclick="downloadLogs()">Download</button>
+                </div>
+                <div class="logs-container" id="logsViewer"><div class="log-line">Loading...</div></div>
+            </div>
+        </div>
+    </div>
+    <script>
+const API=window.location.origin;let cfg={};
+async function init(){await loadCfg();setup();}
+async function loadCfg(){try{const r=await fetch(`${API}/config`,{credentials:'include'});if(r.status===401){location.href='/login.html';return;}if(!r.ok){msg('Failed to load config','error');return;}cfg=await r.json();console.log('Loaded config:',cfg);d('search_results').value=cfg.search_results||40;d('max_duration').value=cfg.max_duration||600;d('max_file_size').value=cfg.max_file_size||500;d('id3_comment').value=cfg.id3_comment||'';d('download_dir').value=cfg.download_dir||'';d('cookie_file').value=cfg.cookie_file||'';d('ytdlp_path').value=cfg.ytdlp_path||'yt-dlp';d('deno_path').value=cfg.deno_path||'deno';d('ytdlp_version').value=cfg.ytdlp_version||'detecting...';}catch(e){console.error('Load error:',e);msg('Error loading config: '+e.message,'error');}}
+async function saveCfg(){const b=d('saveBtn');b.disabled=true;b.textContent='Saving...';try{const s=await fetch(`${API}/auth/session`,{credentials:'include'});if(!s.ok)throw new Error('Session expired');const sd=await s.json();if(!sd.authenticated){location.href='/login.html';return;}const c={search_results:int(d('search_results').value),max_duration:int(d('max_duration').value),max_file_size:int(d('max_file_size').value),id3_comment:d('id3_comment').value,download_dir:d('download_dir').value,cookie_file:d('cookie_file').value,deno_path:d('deno_path').value,csrf_token:sd.csrf_token};console.log('Saving config:',c);const r=await fetch(`${API}/config`,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify(c)});const data=await r.json();console.log('Save response:',r.status,data);if(r.ok){msg('✓ Configuration saved successfully','success');await loadCfg();}else{let errMsg='Validation failed';if(data.errors&&Array.isArray(data.errors)){errMsg+=': \n- '+data.errors.join('\n- ');}else if(data.error){errMsg+=': '+data.error;}msg(errMsg,'error');}}catch(e){console.error('Save error:',e);msg('Error saving config: '+e.message,'error');}finally{b.disabled=false;b.textContent='💾 Save Changes';}}
+async function updateYtdlp(){try{const s=await fetch(`${API}/auth/session`,{credentials:'include'});const sd=await s.json();msg('Updating yt-dlp...','success');const r=await fetch(`${API}/admin/update-ytdlp`,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({csrf_token:sd.csrf_token})});const data=await r.json();if(data.success){d('ytdlp_version').value=data.version;msg('✓ yt-dlp updated successfully: '+data.version,'success');}else{msg('Update failed: '+data.message,'error');}}catch(e){msg('Error updating yt-dlp: '+e.message,'error');}}
+async function logout(){await fetch(`${API}/auth/logout`,{method:'POST',credentials:'include'});location.href='/login.html?msg=logged_out';}
+async function refreshLogs(){const lines=d('logLines').value,filter=d('logFilter').value;try{const r=await fetch(`${API}/admin/logs?lines=${lines}&filter=${filter}`,{credentials:'include'});if(r.status===401){location.href='/login.html';return;}const data=await r.json();showLogs(data.logs||[]);}catch(e){d('logsViewer').innerHTML='<div class="log-line error">Failed to load logs: '+e.message+'</div>';}}
+function showLogs(logs){const v=d('logsViewer');if(!logs||!logs.length){v.innerHTML='<div class="log-line">No logs available. To view logs here, redirect console output to ./logs/app.log</div>';return;}let html='',errs=0,warns=0;logs.forEach(l=>{const cls=logLvl(l);html+=`<div class="log-line ${cls}">${esc(l)}</div>`;if(cls==='error')errs++;if(cls==='warning')warns++;});v.innerHTML=html;v.scrollTop=v.scrollHeight;d('totalLines').textContent=logs.length;d('errorCount').textContent=errs;d('warnCount').textContent=warns;}
+function logLvl(l){const x=l.toLowerCase();if(x.includes('error')||x.includes('exception'))return'error';if(x.includes('warning')||x.includes('warn'))return'warning';if(x.includes('info')||x.includes('✓'))return'info';if(x.includes('success'))return'success';return'';}
+function downloadLogs(){const logs=Array.from(document.querySelectorAll('.log-line')).map(el=>el.textContent).join('\n');const blob=new Blob([logs],{type:'text/plain'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`logs-${Date.now()}.txt`;a.click();URL.revokeObjectURL(url);}
+function esc(t){const d=document.createElement('div');d.textContent=t;return d.innerHTML;}
+function msg(t,type){const e=d('message');e.className='message '+type;e.textContent=t;setTimeout(()=>e.textContent='',8000);}
+function setup(){d('saveBtn').addEventListener('click',saveCfg);document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.tab-content').forEach(x=>x.classList.remove('active'));t.classList.add('active');document.querySelector(`[data-content="${t.dataset.tab}"]`).classList.add('active');}));document.querySelectorAll('.nav-link[data-view]').forEach(l=>l.addEventListener('click',()=>{const v=l.dataset.view;document.querySelectorAll('.nav-link').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));l.classList.add('active');d(v+'View').classList.add('active');if(v==='logs')refreshLogs();}));}
+function d(id){return document.getElementById(id);}
+function int(v){return parseInt(v);}
+init();
+    </script>
+</body>
+</html>

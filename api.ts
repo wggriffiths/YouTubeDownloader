@@ -2,7 +2,7 @@
 
 /**
  * YouTube Downloader API - Deno/TypeScript Port
- * Version: 1.0.5
+ * Version: 1.0.7
  * 
  * COMPLETE FIX for playlist progress tracking and cross-platform compatibility
  * 
@@ -15,6 +15,21 @@
  * 6. Cross-platform ZIP creation (Windows/Linux/Mac)
  * 7. Playlist-named ZIP files: EDM.zip, Chill Vibes.zip, etc.
  * 8. NATIVE system commands for instant ZIP (PowerShell/zip) - 100x faster!
+ * 
+ * v1.0.7 Changes:
+ * - FIXED: Added routes for /login.html and /config.html
+ * - Now you can access the admin panel and login page
+ * 
+ * v1.0.6 Changes:
+ * - SECURITY: Added session-based authentication system
+ * - SECURITY: Argon2id password hashing
+ * - SECURITY: CSRF protection for admin routes
+ * - SECURITY: Rate limiting (5 attempts/15 min)
+ * - SECURITY: 30-minute session timeout
+ * - NEW: Admin dashboard at /config.html
+ * - NEW: Config management via /config endpoint
+ * - NEW: Log viewer at /admin/logs
+ * - NEW: yt-dlp updater at /admin/update-ytdlp
  * 
  * v1.0.5 Changes:
  * - FIXED: Video audio format now AAC instead of opus
@@ -39,22 +54,74 @@
  * - Applies to both single downloads and playlists
  */
 
-import { join, resolve, dirname } from "https://deno.land/std@0.202.0/path/mod.ts";
+import { loadConfig } from "./config.ts";
+import { join, resolve, dirname, fromFileUrl} from "https://deno.land/std@0.202.0/path/mod.ts";
 import { Application, Router, send } from "https://deno.land/x/oak@v12.6.1/mod.ts";
 import { oakCors } from "https://deno.land/x/cors@v1.2.2/mod.ts";
 import { exists } from "https://deno.land/std@0.208.0/fs/mod.ts";
 
 // ============================================================================
+// SECURITY IMPORTS
+// ============================================================================
+import { securityHeadersMiddleware } from "./middleware/security.ts";
+import authRouter from "./routes/auth.ts";
+import adminRouter from "./routes/admin.ts";
+
+// ============================================================================
 // CONFIGURATION
 // ============================================================================
+import { 
+  ROOT_DIR,
+  BIN_DIR,
+  DOWNLOADS_DIR,
+  PUBLIC_DIR,
+  LOGS_DIR,
+  CONFIG_FILE,
+  YT_DLP_PATH,
+  FFMPEG_PATH,
+  DENO_PATH
+} from "./paths.ts";
 
+import * as log from "https://deno.land/std@0.208.0/log/mod.ts";
+
+await Deno.mkdir(LOGS_DIR, { recursive: true });
+await log.setup({
+  handlers: {
+    console: new log.handlers.ConsoleHandler("DEBUG"),
+    file: new log.handlers.FileHandler("DEBUG", {
+      filename: join(LOGS_DIR, "app.log"),
+      formatter: (record) =>
+        `${new Date().toISOString()} - ${record.levelName} - ${record.msg}`,
+    }),
+  },
+
+  loggers: {
+    default: {
+      level: "DEBUG",
+      handlers: ["console", "file"],
+    },
+  },
+});
+
+const logger = log.getLogger();
+
+// NEEDS TO GO IN CONGIG
 const PORT = parseInt(Deno.env.get("PORT") || "8000");
-const DOWNLOAD_DIR = Deno.env.get("DOWNLOAD_DIR") || "./downloads";
-const SEARCH_RESULTS = parseInt(Deno.env.get("SEARCH_RESULTS") || "40");
-const MAX_DURATION = parseInt(Deno.env.get("MAX_DURATION") || "600");
-const YT_DLP_PATH = Deno.env.get("YT_DLP_PATH") || "yt-dlp";
-const ID3_COMMENT = Deno.env.get("ID3_COMMENT") || "Downloaded via YouTube API";
 
+//function resolveYtDlpPath(): string {
+//  const envPath = Deno.env.get("YT_DLP_PATH");
+//  if (envPath && envPath.trim() !== "") {
+//    return envPath;
+//  }
+//
+//  const isWindows = Deno.build.os === "windows";
+//  const ytBinary = isWindows ? "yt-dlp.exe" : "yt-dlp";
+//
+//  return join(BIN_DIR, ytBinary);
+//}
+//
+//export const YT_DLP_PATH = resolveYtDlpPath();
+//
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -118,24 +185,50 @@ function generateJobId(): string {
 }
 
 async function ensureDownloadDir(jobId: string): Promise<string> {
-  const dir = `${DOWNLOAD_DIR}/${jobId}`;
+  //const dir = `${DOWNLOAD_DIR}/${jobId}`;
+  const dir = join(DOWNLOADS_DIR, jobId);
   await Deno.mkdir(dir, { recursive: true });
   return dir;
 }
 
+// ============================================================================
+// LOGGING WITH FILE OUTPUT
+// ============================================================================
+
+async function writeToLogFile(message: string) {
+  try {
+    const logPath = join(LOGS_DIR, "app.log");
+    const timestamp = new Date().toISOString();
+    const logLine = `${timestamp} - ${message}\n`;
+    await Deno.writeTextFile(logPath, logLine, { append: true });
+  } catch (e) {
+    // Silent fail - don't crash if log file can't be written
+    console.error(`Failed to write to log file: ${e}`);
+  }
+}
+
 function logInfo(message: string) {
-  const timestamp = new Date().toISOString();
-  console.log(`${timestamp} - INFO - ${message}`);
+  const msg = `INFO - ${message}`;
+  console.log(`[INFO] ${message}`);
+  writeToLogFile(msg); // Write to file
 }
 
 function logError(message: string) {
-  const timestamp = new Date().toISOString();
-  console.error(`${timestamp} - ERROR - ${message}`);
+  const msg = `ERROR - ${message}`;
+  console.error(`[ERROR] ${message}`);
+  writeToLogFile(msg); // Write to file
 }
 
 function logDebug(message: string) {
-  const timestamp = new Date().toISOString();
-  console.log(`${timestamp} - DEBUG - ${message}`);
+  const msg = `DEBUG - ${message}`;
+  console.log(`[DEBUG] ${message}`);
+  writeToLogFile(msg); // Write to file
+}
+
+function logWarning(message: string) {
+  const msg = `WARNING - ${message}`;
+  console.warn(`[WARNING] ${message}`);
+  writeToLogFile(msg); // Write to file
 }
 
 // ============================================================================
@@ -144,32 +237,34 @@ function logDebug(message: string) {
 
 async function searchYouTube(query: string): Promise<SearchResult[]> {
   logInfo(`Searching YouTube for: ${query}`);
-  
+
+  const config = await loadConfig();
+
   const command = new Deno.Command(YT_DLP_PATH, {
     args: [
       "--dump-json",
       "--flat-playlist",
       "--skip-download",
-      `ytsearch${SEARCH_RESULTS}:${query}`,
+      `ytsearch${config.search_results}:${query}`,
     ],
     stdout: "piped",
     stderr: "piped",
   });
-  
+
   const { stdout, stderr, code } = await command.output();
-  
+
   if (code !== 0) {
     const error = new TextDecoder().decode(stderr);
     logError(`Search failed: ${error}`);
     return [];
   }
-  
+
   const output = new TextDecoder().decode(stdout);
   const results: SearchResult[] = [];
-  
+
   for (const line of output.trim().split("\n")) {
     if (!line.trim()) continue;
-    
+
     try {
       const data = JSON.parse(line);
       results.push({
@@ -184,7 +279,7 @@ async function searchYouTube(query: string): Promise<SearchResult[]> {
       logError(`Failed to parse search result: ${e}`);
     }
   }
-  
+
   logInfo(`Found ${results.length} search results`);
   return results;
 }
@@ -196,17 +291,31 @@ async function downloadVideo(job: Job) {
   job.status = "processing";
   logInfo(`Starting download for job ${jobId}: ${job.url}`);
 
-  const baseDir = dirname(Deno.execPath());
-  const cookiesPath = join(baseDir, "bin", "cookies.txt");
+  const cookiesPath = join(BIN_DIR, "cookies.txt");
 
   let useCookies = false;
   try {
-    await Deno.stat(cookiesPath);
-    useCookies = true;
-  } catch {}
+    const stat = await Deno.stat(cookiesPath);
+    if (stat.isFile && stat.size > 0) {
+      useCookies = true;
+      logInfo(`Using cookies file: ${cookiesPath}`);
+    } else {
+      logWarning(`Cookies file exists but is empty: ${cookiesPath}`);
+    }
+  } catch {
+    logInfo(`No cookies file found at: ${cookiesPath}`);
+  }
+
+  // Build PATH so yt-dlp can find deno + ffmpeg inside ./bin
+  const sep = Deno.build.os === "windows" ? ";" : ":";
+  const env = {
+    ...Deno.env.toObject(),
+    PATH: `${BIN_DIR}${sep}${Deno.env.get("PATH") ?? ""}`,
+  };
 
   const args: string[] = [
     "--no-playlist",
+    "--ffmpeg-location", BIN_DIR,
     "--format",
     job.format_type === "video"
       ? `bestvideo[height<=${job.quality}]+bestaudio[ext=m4a]/best[height<=${job.quality}]`
@@ -214,7 +323,7 @@ async function downloadVideo(job: Job) {
   ];
 
   if (useCookies) {
-    args.splice(1, 0, "--cookies", cookiesPath);
+    args.push("--cookies", cookiesPath);
   }
 
   if (job.format_type === "audio") {
@@ -226,16 +335,17 @@ async function downloadVideo(job: Job) {
       "--add-metadata",
       "--parse-metadata", "%(title)s:%(meta_artist)s - %(meta_title)s",
       "--parse-metadata", "%(uploader)s:%(meta_uploader)s",
-      "--output", `${downloadDir}/%(meta_artist,meta_uploader,uploader|Unknown Artist)s - %(meta_title,title)s.%(ext)s`,
+      "--output",
+      `${downloadDir}/%(meta_artist,meta_uploader,uploader|Unknown Artist)s - %(meta_title,title)s.%(ext)s`,
     );
-	
   } else {
     args.push(
       "--merge-output-format", "mp4",
       "--embed-thumbnail",
       "--add-metadata",
-      "--output", `${downloadDir}/%(title)s.%(ext)s`,
-    );	
+      "--output",
+      `${downloadDir}/%(title)s.%(ext)s`,
+    );
   }
 
   args.push(job.url);
@@ -245,6 +355,7 @@ async function downloadVideo(job: Job) {
     stdout: "piped",
     stderr: "piped",
     cwd: Deno.cwd(),
+    env,
   });
 
   const { stderr, code } = await command.output();
@@ -274,6 +385,7 @@ async function downloadVideo(job: Job) {
   job.status = "completed";
   job.file_name = files[0];
   job.file_path = `${downloadDir}/${files[0]}`;
+
   logInfo(`Download completed for job ${jobId}: ${job.file_name}`);
 }
 
@@ -287,16 +399,23 @@ async function downloadPlaylist(job: Job) {
   logInfo(`╚${"═".repeat(78)}╝`);
   logInfo(`URL: ${job.url}`);
 
-  const baseDir = dirname(Deno.execPath());
-  const cookiesPath = join(baseDir, "bin", "cookies.txt");
+  const config = await loadConfig();
+
+  // Always resolve cookie file from ROOT_DIR + config
+  const cookiesPath = join(BIN_DIR, "cookies.txt");
 
   let useCookies = false;
+
   try {
-    await Deno.stat(cookiesPath);
-    useCookies = true;
-    logInfo(`✓ Using cookies file: ${cookiesPath}`);
+    const stat = await Deno.stat(cookiesPath);
+    if (stat.isFile && stat.size > 0) {
+      useCookies = true;
+      logInfo(`Using cookies file: ${cookiesPath}`);
+    } else {
+      logWarning(`Cookies file exists but is empty: ${cookiesPath}`);
+    }
   } catch {
-    logInfo(`ℹ No cookies file found`);
+    logInfo(`No cookies file found at: ${cookiesPath}`);
   }
 
   const args: string[] = [
@@ -345,10 +464,29 @@ async function downloadPlaylist(job: Job) {
 
   logInfo(`Executing: yt-dlp ${args.join(" ")}`);
 
+  // Build PATH so yt-dlp can find deno + ffmpeg inside ./bin
+  const sep = Deno.build.os === "windows" ? ";" : ":";
+
+  const env = {
+    ...Deno.env.toObject(),
+    PATH: `${BIN_DIR}${sep}${Deno.env.get("PATH") ?? ""}`,
+  };
+
+  // Force yt-dlp to use our bundled Deno runtime
+  args.unshift(
+    "--ffmpeg-location", BIN_DIR,
+    "--js-runtimes", `deno:${DENO_PATH}`
+  );
+
+  logInfo(`DENO_PATH: ${DENO_PATH}`);
+  logInfo(`YT_DLP_PATH: ${YT_DLP_PATH}`);
+  logDebug(`Executing: ${YT_DLP_PATH} ${args.join(" ")}`);
+
   const command = new Deno.Command(YT_DLP_PATH, {
     args,
     stdout: "piped",
     stderr: "piped",
+    env,
   });
 
   const process = command.spawn();
@@ -665,23 +803,32 @@ async function downloadPlaylist(job: Job) {
 // ============================================================================
 
 async function cleanupOrphanedFolders() {
-  logInfo("Running startup cleanup...");
-  
+  logInfo("✓ Running startup cleanup...");
+
   try {
-    if (await exists(DOWNLOAD_DIR)) {
-      for await (const entry of Deno.readDir(DOWNLOAD_DIR)) {
-        if (entry.isDirectory) {
-          const folderPath = `${DOWNLOAD_DIR}/${entry.name}`;
-          try {
-            await Deno.remove(folderPath, { recursive: true });
-            logInfo(`Cleaned up orphaned folder: ${entry.name}`);
-          } catch (e) {
-            logError(`Failed to remove folder ${entry.name}: ${e}`);
-          }
+    // Ensure downloads directory exists before scanning
+    try {
+      await Deno.stat(DOWNLOADS_DIR);
+    } catch {
+      logInfo("No downloads directory found — nothing to clean");
+      return;
+    }
+
+    for await (const entry of Deno.readDir(DOWNLOADS_DIR)) {
+      if (entry.isDirectory) {
+        const folderPath = join(DOWNLOADS_DIR, entry.name);
+
+        try {
+          await Deno.remove(folderPath, { recursive: true });
+          logInfo(`Cleaned up orphaned folder: ${entry.name}`);
+        } catch (e) {
+          logError(`Failed to remove folder ${entry.name}: ${e}`);
         }
       }
     }
-    logInfo("Startup cleanup complete");
+
+    logInfo("✓ Startup cleanup complete");
+
   } catch (e) {
     logError(`Startup cleanup error: ${e}`);
   }
@@ -690,33 +837,41 @@ async function cleanupOrphanedFolders() {
 async function periodicCleanup() {
   while (true) {
     await new Promise(resolve => setTimeout(resolve, 300000)); // 5 minutes
-    
+
     try {
       const now = Date.now();
       const maxAge = 600000; // 10 minutes
-      
+
       for (const [jobId, job] of jobs.entries()) {
         const age = now - job.created_at;
-        
+
         if (age > maxAge && (job.status === "completed" || job.status === "failed")) {
           try {
-            const folderPath = `${DOWNLOAD_DIR}/${jobId}`;
-            if (await exists(folderPath)) {
+            const folderPath = join(DOWNLOADS_DIR, jobId);
+
+            try {
+              await Deno.stat(folderPath);
               await Deno.remove(folderPath, { recursive: true });
               logInfo(`Periodic cleanup: removed ${jobId}`);
+            } catch {
+              // folder doesn't exist
             }
+
             jobs.delete(jobId);
           } catch (e) {
             logError(`Periodic cleanup error for ${jobId}: ${e}`);
           }
         }
       }
-      
-      if (await exists(DOWNLOAD_DIR)) {
-        for await (const entry of Deno.readDir(DOWNLOAD_DIR)) {
+
+      // Remove orphaned folders
+      try {
+        await Deno.stat(DOWNLOADS_DIR);
+
+        for await (const entry of Deno.readDir(DOWNLOADS_DIR)) {
           if (entry.isDirectory && !jobs.has(entry.name)) {
             try {
-              const folderPath = `${DOWNLOAD_DIR}/${entry.name}`;
+              const folderPath = join(DOWNLOADS_DIR, entry.name);
               await Deno.remove(folderPath, { recursive: true });
               logInfo(`Periodic cleanup: removed orphaned folder ${entry.name}`);
             } catch (e) {
@@ -724,7 +879,10 @@ async function periodicCleanup() {
             }
           }
         }
+      } catch {
+        // downloads directory doesn't exist
       }
+
     } catch (e) {
       logError(`Error in cleanup task: ${e}`);
     }
@@ -736,7 +894,7 @@ async function cleanupJobFiles(jobId: string) {
   
   try {
     if (jobs.has(jobId)) {
-      const folderPath = `${DOWNLOAD_DIR}/${jobId}`;
+      const folderPath = join(DOWNLOADS_DIR, jobId);
       if (await exists(folderPath)) {
         await Deno.remove(folderPath, { recursive: true });
         logInfo(`Cleaned up directory for job ${jobId}`);
@@ -749,6 +907,321 @@ async function cleanupJobFiles(jobId: string) {
     logError(`Cleanup error for job ${jobId}: ${e}`);
   }
 }
+
+// ============================================================================
+// Bootstrap
+// ============================================================================
+
+async function bootstrapEnvironment() {
+  await Deno.mkdir(BIN_DIR, { recursive: true });
+  await Deno.mkdir(DOWNLOADS_DIR, { recursive: true });
+  await Deno.mkdir(PUBLIC_DIR, { recursive: true });
+  await Deno.mkdir(LOGS_DIR, { recursive: true });
+
+  await ensureYtDlp();
+  await ensureDeno();
+  await ensureFfmpeg();
+}
+
+async function ensureDeno() {
+  const isWindows = Deno.build.os === "windows";
+  const isLinux = Deno.build.os === "linux";
+  const isMac = Deno.build.os === "darwin";
+  const arch = Deno.build.arch;
+
+  const denoBinary = isWindows ? "deno.exe" : "deno";
+  const denoPath = join(BIN_DIR, denoBinary);
+
+  try {
+    await Deno.stat(denoPath);
+    logInfo(`✓ Found ${denoBinary}`);
+    return denoPath;
+  } catch {
+    logInfo("[*] Installing Deno runtime...");
+  }
+
+  let url = "";
+
+  if (isWindows) {
+    url = arch === "aarch64"
+      ? "https://github.com/denoland/deno/releases/latest/download/deno-aarch64-pc-windows-msvc.zip"
+      : "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip";
+  }
+  else if (isLinux) {
+    url = arch === "aarch64"
+      ? "https://github.com/denoland/deno/releases/latest/download/deno-aarch64-unknown-linux-gnu.zip"
+      : "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip";
+  }
+  else if (isMac) {
+    url = arch === "aarch64"
+      ? "https://github.com/denoland/deno/releases/latest/download/deno-aarch64-apple-darwin.zip"
+      : "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-apple-darwin.zip";
+  }
+
+  if (!url) {
+    throw new Error(`Unsupported platform: ${Deno.build.os}/${arch}`);
+  }
+
+  logInfo(`Downloading Deno for ${Deno.build.os}/${arch}`);
+  logInfo(`Source: ${url}`);
+
+  const archivePath = join(ROOT_DIR, "deno.zip");
+  const extractDir = join(ROOT_DIR, "deno_extract");
+
+  const res = await fetch(url);
+  if (!res.ok) {
+    logError(`Deno download failed: ${res.status} ${res.statusText}`);
+    throw new Error("Deno download failed");
+  }
+
+  await Deno.writeFile(archivePath, new Uint8Array(await res.arrayBuffer()));
+  await Deno.mkdir(extractDir, { recursive: true });
+
+  let code = 0;
+  let stderr = new Uint8Array();
+
+  if (isWindows) {
+    // Use PowerShell on Windows
+    const unzip = new Deno.Command("powershell", {
+      args: [
+        "-NoProfile",
+        "-Command",
+        `Expand-Archive -LiteralPath "${archivePath}" -DestinationPath "${extractDir}" -Force`,
+      ],
+      stdout: "piped",
+      stderr: "piped",
+    });
+
+    ({ code, stderr } = await unzip.output());
+  } else {
+    // Use unzip on Linux/macOS
+    const unzip = new Deno.Command("unzip", {
+      args: ["-o", archivePath, "-d", extractDir],
+      stdout: "piped",
+      stderr: "piped",
+    });
+
+    ({ code, stderr } = await unzip.output());
+  }
+
+  if (code !== 0) {
+    logError("Deno extraction failed:");
+    logError(new TextDecoder().decode(stderr));
+    throw new Error("Deno extraction failed");
+  }
+
+  const extractedBinary = join(extractDir, denoBinary);
+
+  await Deno.copyFile(extractedBinary, denoPath);
+
+  if (!isWindows) {
+    await Deno.chmod(denoPath, 0o755);
+  }
+
+  await Deno.remove(archivePath).catch(() => {});
+  await Deno.remove(extractDir, { recursive: true }).catch(() => {});
+
+  logInfo(`✓ Deno runtime ready (${Deno.build.os})`);
+
+  return denoPath;
+}
+
+async function ensureYtDlp(): Promise<string> {
+  const isWindows = Deno.build.os === "windows";
+  const arch = Deno.build.arch;
+
+  const ytBinary = isWindows ? "yt-dlp.exe" : "yt-dlp";
+  const ytPath = join(BIN_DIR, ytBinary);
+
+  try {
+    await Deno.stat(ytPath);
+    logInfo(`✓ Found ${ytBinary}`);
+    return ytPath;
+  } catch {
+    logInfo(`[*] Installing ${ytBinary}...`);
+  }
+
+  let url = "";
+
+  if (isWindows) {
+    url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
+  } else if (Deno.build.os === "linux") {
+    url = arch === "aarch64"
+      ? "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux_aarch64"
+      : "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux";
+  } else if (Deno.build.os === "darwin") {
+    url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos";
+  }
+
+  if (!url) {
+    throw new Error(`Unsupported platform: ${Deno.build.os}/${arch}`);
+  }
+
+  logInfo(`Downloading yt-dlp for ${Deno.build.os}/${arch}`);
+  logInfo(`Source: ${url}`);
+
+  const res = await fetch(url);
+  if (!res.ok) {
+    logError(`yt-dlp download failed: ${res.status} ${res.statusText}`);
+    throw new Error("yt-dlp download failed");
+  }
+
+  const data = new Uint8Array(await res.arrayBuffer());
+
+  if (data.length < 1_000_000) {
+    throw new Error("Invalid yt-dlp download (file too small)");
+  }
+
+  await Deno.writeFile(ytPath, data);
+
+  if (!isWindows) {
+    await Deno.chmod(ytPath, 0o755);
+  }
+
+  logInfo(`✓ yt-dlp ready (${Deno.build.os})`);
+
+  return ytPath;
+}
+
+async function ensureFfmpeg() {
+  const isWindows = Deno.build.os === "windows";
+  const isLinux = Deno.build.os === "linux";
+  const isMac = Deno.build.os === "darwin";
+
+  const ffmpegBinary = isWindows ? "ffmpeg.exe" : "ffmpeg";
+  const ffmpegPath = join(BIN_DIR, ffmpegBinary);
+
+  try {
+    await Deno.stat(ffmpegPath);
+    logInfo(`✓ Found ${ffmpegBinary}`);
+    return;
+  } catch {
+    logInfo("[*] Installing FFmpeg...");
+  }
+
+  if (isWindows) {
+    // ---------------- WINDOWS ----------------
+    const url =
+      "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
+
+    const zipPath = join(ROOT_DIR, "ffmpeg.zip");
+    const extractDir = join(ROOT_DIR, "ffmpeg_extract");
+
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("FFmpeg download failed");
+
+    await Deno.writeFile(zipPath, new Uint8Array(await res.arrayBuffer()));
+    await Deno.mkdir(extractDir, { recursive: true });
+
+    const unzip = new Deno.Command("powershell", {
+      args: [
+        "-NoProfile",
+        "-Command",
+        `Expand-Archive -LiteralPath "${zipPath}" -DestinationPath "${extractDir}" -Force`,
+      ],
+      stdout: "null",
+      stderr: "null",
+    });
+
+    await unzip.output();
+
+    async function findFile(dir: string): Promise<string | null> {
+      for await (const entry of Deno.readDir(dir)) {
+        const fullPath = join(dir, entry.name);
+        if (entry.isFile && entry.name.toLowerCase() === "ffmpeg.exe") {
+          return fullPath;
+        }
+        if (entry.isDirectory) {
+          const result = await findFile(fullPath);
+          if (result) return result;
+        }
+      }
+      return null;
+    }
+
+    const found = await findFile(extractDir);
+    if (!found) throw new Error("ffmpeg.exe not found after extraction");
+
+    await Deno.copyFile(found, ffmpegPath);
+    await Deno.remove(zipPath).catch(() => {});
+    await Deno.remove(extractDir, { recursive: true }).catch(() => {});
+  }
+
+  else if (isLinux) {
+    // ---------------- LINUX ----------------
+    const arch = Deno.build.arch; // x86_64 / aarch64
+
+    const url =
+      arch === "aarch64"
+        ? "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linuxarm64-gpl.tar.xz"
+        : "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz";
+
+    logInfo(`Downloading FFmpeg for arch=${arch}`);
+    logInfo(`Source: ${url}`);
+
+    const tarPath = join(ROOT_DIR, "ffmpeg.tar.xz");
+    const extractDir = join(ROOT_DIR, "ffmpeg_extract");
+
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": "ytdl-api/1.0.7 (Deno)",
+        "Accept": "application/octet-stream",
+      },
+    });
+
+    if (!res.ok) {
+      logError(`FFmpeg download failed: ${res.status} ${res.statusText}`);
+      throw new Error("FFmpeg download failed");
+    }
+
+    await Deno.writeFile(tarPath, new Uint8Array(await res.arrayBuffer()));
+    await Deno.mkdir(extractDir, { recursive: true });
+
+    const extract = new Deno.Command("tar", {
+      args: ["-xJf", tarPath, "-C", extractDir],
+    });
+
+    const { code, stderr } = await extract.output();
+    if (code !== 0) {
+      logError("Tar extraction failed:");
+      logError(new TextDecoder().decode(stderr));
+      throw new Error("FFmpeg extraction failed");
+    }
+
+    async function findFile(dir: string): Promise<string | null> {
+      for await (const entry of Deno.readDir(dir)) {
+        const fullPath = join(dir, entry.name);
+        if (entry.isFile && entry.name === "ffmpeg") {
+          return fullPath;
+        }
+        if (entry.isDirectory) {
+          const result = await findFile(fullPath);
+          if (result) return result;
+        }
+      }
+      return null;
+    }
+
+    const found = await findFile(extractDir);
+    if (!found) throw new Error("ffmpeg not found after extraction");
+
+    await Deno.copyFile(found, ffmpegPath);
+    await Deno.chmod(ffmpegPath, 0o755);
+
+    await Deno.remove(tarPath).catch(() => {});
+    await Deno.remove(extractDir, { recursive: true }).catch(() => {});
+  }
+
+  else if (isMac) {
+    logWarning("macOS auto-install not implemented.");
+    logWarning("Please install FFmpeg using: brew install ffmpeg");
+    return;
+  }
+
+  logInfo(`✓ FFmpeg ready (${Deno.build.os})`);
+}
+// ============================================================================
+// End Bootstrap
 
 // ============================================================================
 // ROUTES
@@ -764,17 +1237,51 @@ router.get("/", async (ctx) => {
   } catch (e) {
     ctx.response.body = {
       service: "YouTube Downloader API",
-      version: "1.0.5",
+      version: "1.0.7",
       status: "online",
       message: "Frontend not found. Deploy index.html to ./public/",
     };
   }
 });
 
+router.get("/favicon.ico", async (ctx) => {
+  try {
+    await send(ctx, "favicon.ico", {
+      root: "./public",
+    });
+  } catch {
+    ctx.response.status = 404;
+  }
+});
+
+// Serve login page
+router.get("/login.html", async (ctx) => {
+  try {
+    const html = await Deno.readTextFile("./public/login.html");
+    ctx.response.type = "text/html";
+    ctx.response.body = html;
+  } catch (e) {
+    ctx.response.status = 404;
+    ctx.response.body = { error: "Login page not found" };
+  }
+});
+
+// Serve config/admin page
+router.get("/config.html", async (ctx) => {
+  try {
+    const html = await Deno.readTextFile("./public/config.html");
+    ctx.response.type = "text/html";
+    ctx.response.body = html;
+  } catch (e) {
+    ctx.response.status = 404;
+    ctx.response.body = { error: "Config page not found" };
+  }
+});
+
 router.get("/health", (ctx) => {
   ctx.response.body = {
     service: "YouTube Downloader API",
-    version: "1.0.5",
+    version: "1.0.7",
     status: "online",
   };
 });
@@ -921,7 +1428,7 @@ router.get("/download/:jobId", async (ctx) => {
   );
   
   await send(ctx, job.file_name!, {
-    root: `${DOWNLOAD_DIR}/${jobId}`,
+    root: join(DOWNLOADS_DIR, jobId),
   });
   
   cleanupJobFiles(jobId);
@@ -950,7 +1457,7 @@ router.get("/download/playlist/:jobId", async (ctx) => {
   );
   
   await send(ctx, job.file_name!, {
-    root: `${DOWNLOAD_DIR}/${jobId}`,
+    root: join(DOWNLOADS_DIR, jobId),
   });
   
   cleanupJobFiles(jobId);
@@ -962,10 +1469,15 @@ router.get("/download/playlist/:jobId", async (ctx) => {
 
 const app = new Application();
 
+// 1. Security headers (MUST BE FIRST)
+app.use(securityHeadersMiddleware);
+
+// 2. CORS
 app.use(oakCors({
   origin: "*",
 }));
 
+// 3. Error handler
 app.use(async (ctx, next) => {
   try {
     await next();
@@ -976,6 +1488,15 @@ app.use(async (ctx, next) => {
   }
 });
 
+// 4. Auth routes (no authentication required)
+app.use(authRouter.routes());
+app.use(authRouter.allowedMethods());
+
+// 5. Admin routes (authentication required)
+app.use(adminRouter.routes());
+app.use(adminRouter.allowedMethods());
+
+// 6. Public API routes
 app.use(router.routes());
 app.use(router.allowedMethods());
 
@@ -985,23 +1506,45 @@ app.use(router.allowedMethods());
 
 async function main() {
   logInfo("═".repeat(80));
-  logInfo("YouTube Downloader API v1.0.5");
+  logInfo("YouTube Downloader API v1.0.7");
   logInfo("═".repeat(80));
-  
-  await Deno.mkdir(DOWNLOAD_DIR, { recursive: true });
-  await Deno.mkdir("./public", { recursive: true });
-  
+
+  await bootstrapEnvironment();
+
+  // Initialize config.json if missing
+  try {
+    await Deno.stat(CONFIG_FILE);
+    logInfo(`✓ Config file: ${CONFIG_FILE}`);
+  } catch {
+
+    const defaultConfig = {
+      search_results: 40,
+      max_duration: 600,
+      max_file_size: 500,
+      id3_comment: "Downloaded via YouTube API",
+    };
+
+    await Deno.writeTextFile(
+      CONFIG_FILE,
+      JSON.stringify(defaultConfig, null, 2),
+    );
+
+    logInfo("✓ Config file created");
+  }
+
   await cleanupOrphanedFolders();
-  
-  periodicCleanup().catch(e => logError(`Periodic cleanup error: ${e}`));
-  
-  logInfo(`✓ Download directory: ${DOWNLOAD_DIR}`);
-  logInfo(`✓ yt-dlp path: ${YT_DLP_PATH}`);
-  logInfo(`✓ ZIP method: ${Deno.build.os === "windows" ? "PowerShell" : "system zip"}`);
-  logInfo(`✓ Periodic cleanup started`);
+
+  periodicCleanup().catch(e =>
+    logError(`Periodic cleanup error: ${e}`)
+  );
+
+  logInfo(`✓ Root directory: ${ROOT_DIR}`);
+  logInfo(`✓ Download directory: ${DOWNLOADS_DIR}`);
+  logInfo(`✓ yt-dlp path: ${join(BIN_DIR, "yt-dlp.exe")}`);
+  logInfo(`✓ Admin panel: http://localhost:${PORT}/login.html`);
   logInfo(`✓ Server listening on http://localhost:${PORT}`);
   logInfo("═".repeat(80));
-  
+
   await app.listen({ port: PORT });
 }
 

@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Downloader - Login</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0a0e1a 0%, #1a1f35 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #e2e8f0;
+        }
+
+        .login-container {
+            background: rgba(26, 31, 53, 0.9);
+            border: 1px solid rgba(34, 211, 238, 0.2);
+            border-radius: 1.5rem;
+            padding: 3rem;
+            width: 100%;
+            max-width: 420px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+
+        .logo {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        .logo-text {
+            font-size: 2rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #22d3ee, #7c3aed);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 0.5rem;
+        }
+
+        .logo-subtitle {
+            font-size: 0.85rem;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        .setup-notice, .success-message, .error-message, .session-expired {
+            border-radius: 0.75rem;
+            padding: 1rem;
+            margin-bottom: 1.5rem;
+            font-size: 0.9rem;
+        }
+
+        .setup-notice {
+            background: rgba(34, 211, 238, 0.1);
+            border: 1px solid rgba(34, 211, 238, 0.3);
+            color: #22d3ee;
+        }
+
+        .session-expired {
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            color: #f59e0b;
+        }
+
+        .success-message {
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: #10b981;
+        }
+
+        .error-message {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #ef4444;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.5rem;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 0.875rem 1.125rem;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 0.75rem;
+            color: #e2e8f0;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: #22d3ee;
+            background: rgba(15, 23, 42, 0.8);
+            box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.1);
+        }
+
+        .form-hint {
+            font-size: 0.8rem;
+            color: #64748b;
+            margin-top: 0.5rem;
+        }
+
+        .submit-btn {
+            width: 100%;
+            padding: 1rem;
+            background: linear-gradient(135deg, #22d3ee, #7c3aed);
+            border: none;
+            border-radius: 0.75rem;
+            color: white;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .submit-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(34, 211, 238, 0.3);
+        }
+
+        .submit-btn:active {
+            transform: translateY(0);
+        }
+
+        .submit-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        @media (max-width: 480px) {
+            .login-container {
+                padding: 2rem 1.5rem;
+                margin: 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="logo">
+            <div class="logo-text">YouTube Downloader</div>
+            <div class="logo-subtitle" id="subtitle">Admin Login</div>
+        </div>
+
+        <div id="setupNotice" class="setup-notice" style="display: none;">
+            <strong>First-time setup:</strong> Create an admin password to secure your YouTube Downloader.
+        </div>
+
+        <div id="successMessage" class="success-message" style="display: none;"></div>
+        <div id="errorMessage" class="error-message" style="display: none;"></div>
+        <div id="sessionExpired" class="session-expired" style="display: none;"></div>
+
+        <form id="loginForm">
+            <div class="form-group">
+                <label class="form-label">Password</label>
+                <input 
+                    type="password" 
+                    id="password" 
+                    class="form-input" 
+                    required 
+                    minlength="8"
+                    autocomplete="current-password"
+                    placeholder="Enter your password"
+                    autofocus
+                >
+                <div class="form-hint" id="passwordHint" style="display: none;">
+                    Minimum 8 characters. Use a strong, unique password.
+                </div>
+            </div>
+
+            <button type="submit" class="submit-btn" id="submitBtn">
+                Login
+            </button>
+        </form>
+    </div>
+
+    <script>
+        const API_URL = window.location.origin;
+        let isSetup = false;
+
+        // Check URL parameters
+        const params = new URLSearchParams(window.location.search);
+        const returnTo = params.get('return_to') || '/config.html';
+        const errorParam = params.get('error');
+        const msgParam = params.get('msg');
+
+        // Show messages based on URL params
+        if (msgParam === 'logged_out') {
+            showMessage('successMessage', '<strong>✓ Logged out successfully.</strong> Your session has been terminated.');
+        }
+
+        if (errorParam === 'session_expired') {
+            showMessage('sessionExpired', '<strong>Your session has expired.</strong> Please log in again to continue.');
+        }
+
+        if (errorParam === 'session_timeout') {
+            showMessage('sessionExpired', '<strong>Session timeout.</strong> You were logged out due to inactivity (30 minutes).');
+        }
+
+        // Check setup status
+        async function checkSetup() {
+            try {
+                const response = await fetch(`${API_URL}/auth/check`, {
+                    credentials: 'include'
+                });
+                
+                const data = await response.json();
+                isSetup = !data.setup_complete;
+                
+                if (isSetup) {
+                    document.getElementById('subtitle').textContent = 'Initial Setup';
+                    document.getElementById('setupNotice').style.display = 'block';
+                    document.getElementById('passwordHint').style.display = 'block';
+                    document.getElementById('submitBtn').textContent = 'Complete Setup';
+                }
+            } catch (error) {
+                showError('Failed to connect to API');
+            }
+        }
+
+        // Handle form submission
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const password = document.getElementById('password').value;
+            const submitBtn = document.getElementById('submitBtn');
+            
+            if (password.length < 8) {
+                showError('Password must be at least 8 characters');
+                return;
+            }
+            
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Please wait...';
+            
+            try {
+                const endpoint = isSetup ? '/auth/setup' : '/auth/login';
+                
+                const response = await fetch(`${API_URL}${endpoint}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    credentials: 'include',
+                    body: JSON.stringify({ password })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    window.location.href = returnTo;
+                } else {
+                    showError(data.message || 'Authentication failed');
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = isSetup ? 'Complete Setup' : 'Login';
+                }
+            } catch (error) {
+                showError('Network error. Please try again.');
+                submitBtn.disabled = false;
+                submitBtn.textContent = isSetup ? 'Complete Setup' : 'Login';
+            }
+        });
+
+        function showMessage(elementId, message) {
+            const el = document.getElementById(elementId);
+            el.innerHTML = message;
+            el.style.display = 'block';
+        }
+
+        function showError(message) {
+            showMessage('errorMessage', message);
+        }
+
+        // Initialize
+        checkSetup();
+    </script>
+</body>
+</html>
