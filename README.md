@@ -8,7 +8,10 @@
 
 **One-click deployment** • **Single binary** • **Auto-downloads dependencies** • **Modern UI**
 
-![YouTube Downloader Interface](screenshot.png)
+![YouTube Downloader Interface](screenshot_main.png)
+![YouTube Downloader Interface](screenshot_login.png)
+![YouTube Downloader Interface](screenshot_config.png)
+![YouTube Downloader Interface](screenshot_logs.png)
 
 ---
 
@@ -181,12 +184,12 @@ Playlist with unavailable videos:
 ┌─────────────────────────────────────┐
 │         Deno API (api.ts)           │
 │                                     │
-│  ┌──────────────┐  ┌─────────────┐ │
-│  │   Frontend   │  │  API Routes │ │
-│  │   (index.html)  │  /search    │ │
-│  │              │  │  /download  │ │
-│  │              │  │  /status    │ │
-│  └──────────────┘  └─────────────┘ │
+│  ┌──────────────┐  ┌─────────────┐  │
+│  │   Frontend   │  │  API Routes │  │
+│  │   (index.html)  │  /search    │  │
+│  │              │  │  /download  │  │
+│  │              │  │  /status    │  │
+│  └──────────────┘  └─────────────┘  │
 │                                     │
 │         Calls yt-dlp CLI            │
 └─────────────────────────────────────┘
@@ -209,18 +212,6 @@ Playlist with unavailable videos:
 - **Converter**: [ffmpeg](https://ffmpeg.org/)
 - **Language**: TypeScript
 - **Frontend**: Vanilla JS (no framework bloat)
-
----
-
-## 📊 Performance
-
-| Metric | Value |
-|--------|-------|
-| **Startup time** | ~80ms |
-| **Memory (idle)** | ~45MB |
-| **Memory (active)** | ~80MB |
-| **Binary size** | ~55MB |
-| **Docker image** | ~150MB |
 
 ---
 
