@@ -2,10 +2,27 @@
 
 /**
  * YouTube Downloader API - Deno/TypeScript Port
- * Version: 1.0.7
+ * Version: 1.0.8
  * 
  * COMPLETE FIX for playlist progress tracking and cross-platform compatibility
  * 
+ * v1.0.8 Changes:
+ * Key fixes:
+ * 1. Static file paths (index.html, login.html, config.html, favicon.ico) changed from relative ./public/ to absolute
+ * PUBLIC_DIR so they resolve correctly when Windows SCM sets CWD to C:\Windows\System32
+ * - Windows service management via sc.exe and advapi32 FFI handshake
+ * - Linux service management via systemd unit files
+ * - Commands: install, uninstall, start, stop
+ * - Full CLI argument parser with --help, --version, --port
+ *
+ * Modified: api.ts
+ * - Entry point now calls handleCli() instead of handleServiceCommand()
+ * - Supports --port flag to override server port
+ * - Uses --service flag for Windows SCM launch mode
+ * - Fixed hardcoded "./public/" paths to use PUBLIC_DIR 
+ *   (resolved from exe location) * so pages load correctly when running as a service
+ *
+ * v1.0.7 Changes:
  * Key fixes:
  * 1. Auto-detect playlists from URL (frontend compatibility)
  * 2. Read from stdout with proper flags (--newline, --progress)
@@ -15,11 +32,10 @@
  * 6. Cross-platform ZIP creation (Windows/Linux/Mac)
  * 7. Playlist-named ZIP files: EDM.zip, Chill Vibes.zip, etc.
  * 8. NATIVE system commands for instant ZIP (PowerShell/zip) - 100x faster!
- * 
- * v1.0.7 Changes:
+ *
  * - FIXED: Added routes for /login.html and /config.html
  * - Now you can access the admin panel and login page
- * 
+ *
  * v1.0.6 Changes:
  * - SECURITY: Added session-based authentication system
  * - SECURITY: Argon2id password hashing
@@ -55,6 +71,8 @@
  */
 
 import { loadConfig } from "./config.ts";
+import { handleCli, isRunningAsService, runAsWindowsService } from "./service.ts";
+import type { CliOptions } from "./service.ts";
 import { join, resolve, dirname, fromFileUrl} from "https://deno.land/std@0.202.0/path/mod.ts";
 import { Application, Router, send } from "https://deno.land/x/oak@v12.6.1/mod.ts";
 import { oakCors } from "https://deno.land/x/cors@v1.2.2/mod.ts";
@@ -105,8 +123,8 @@ await log.setup({
 
 const logger = log.getLogger();
 
-// NEEDS TO GO IN CONGIG
-const PORT = parseInt(Deno.env.get("PORT") || "8000");
+// Port can be set via: --port flag > PORT env var > default 8000
+let PORT = parseInt(Deno.env.get("PORT") || "8000");
 
 //function resolveYtDlpPath(): string {
 //  const envPath = Deno.env.get("YT_DLP_PATH");
@@ -1164,7 +1182,7 @@ async function ensureFfmpeg() {
 
     const res = await fetch(url, {
       headers: {
-        "User-Agent": "ytdl-api/1.0.7 (Deno)",
+        "User-Agent": "ytdl-api/1.0.8 (Deno)",
         "Accept": "application/octet-stream",
       },
     });
@@ -1231,15 +1249,15 @@ const router = new Router();
 
 router.get("/", async (ctx) => {
   try {
-    const html = await Deno.readTextFile("./public/index.html");
+    const html = await Deno.readTextFile(join(PUBLIC_DIR, "index.html"));
     ctx.response.type = "text/html";
     ctx.response.body = html;
   } catch (e) {
     ctx.response.body = {
       service: "YouTube Downloader API",
-      version: "1.0.7",
+      version: "1.0.8",
       status: "online",
-      message: "Frontend not found. Deploy index.html to ./public/",
+      message: `Frontend not found. Deploy index.html to ${PUBLIC_DIR}`,
     };
   }
 });
@@ -1247,7 +1265,7 @@ router.get("/", async (ctx) => {
 router.get("/favicon.ico", async (ctx) => {
   try {
     await send(ctx, "favicon.ico", {
-      root: "./public",
+      root: PUBLIC_DIR,
     });
   } catch {
     ctx.response.status = 404;
@@ -1257,7 +1275,7 @@ router.get("/favicon.ico", async (ctx) => {
 // Serve login page
 router.get("/login.html", async (ctx) => {
   try {
-    const html = await Deno.readTextFile("./public/login.html");
+    const html = await Deno.readTextFile(join(PUBLIC_DIR, "login.html"));
     ctx.response.type = "text/html";
     ctx.response.body = html;
   } catch (e) {
@@ -1269,7 +1287,7 @@ router.get("/login.html", async (ctx) => {
 // Serve config/admin page
 router.get("/config.html", async (ctx) => {
   try {
-    const html = await Deno.readTextFile("./public/config.html");
+    const html = await Deno.readTextFile(join(PUBLIC_DIR, "config.html"));
     ctx.response.type = "text/html";
     ctx.response.body = html;
   } catch (e) {
@@ -1281,7 +1299,7 @@ router.get("/config.html", async (ctx) => {
 router.get("/health", (ctx) => {
   ctx.response.body = {
     service: "YouTube Downloader API",
-    version: "1.0.7",
+    version: "1.0.8",
     status: "online",
   };
 });
@@ -1506,7 +1524,7 @@ app.use(router.allowedMethods());
 
 async function main() {
   logInfo("═".repeat(80));
-  logInfo("YouTube Downloader API v1.0.7");
+  logInfo("YouTube Downloader API v1.0.8");
   logInfo("═".repeat(80));
 
   await bootstrapEnvironment();
@@ -1545,9 +1563,43 @@ async function main() {
   logInfo(`✓ Server listening on http://localhost:${PORT}`);
   logInfo("═".repeat(80));
 
+  // Open browser automatically when server is ready (skip when running as a service)
+  app.addEventListener("listen", () => {
+    if (isRunningAsService) return;
+
+    const url = `http://localhost:${PORT}`;
+    logInfo(`Opening browser: ${url}`);
+
+    try {
+      const os = Deno.build.os;
+      if (os === "windows") {
+        new Deno.Command("cmd", { args: ["/c", "start", url], stdout: "null", stderr: "null" }).spawn();
+      } else if (os === "darwin") {
+        new Deno.Command("open", { args: [url], stdout: "null", stderr: "null" }).spawn();
+      } else {
+        new Deno.Command("xdg-open", { args: [url], stdout: "null", stderr: "null" }).spawn();
+      }
+    } catch (e) {
+      logWarning(`Could not open browser automatically: ${e}`);
+    }
+  });
+
   await app.listen({ port: PORT });
 }
 
 if (import.meta.main) {
-  main();
+  const result = await handleCli();
+  if (!result.handled) {
+    // Apply CLI options
+    if (result.options.port) {
+      PORT = result.options.port;
+    }
+
+    // --service flag: launched by Windows SCM, perform SCM handshake
+    if (Deno.args[0] === "--service" && Deno.build.os === "windows") {
+      await runAsWindowsService(main);
+    } else {
+      main();
+    }
+  }
 }
