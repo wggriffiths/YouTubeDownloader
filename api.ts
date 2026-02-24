@@ -2,7 +2,7 @@
 
 /**
  * YouTube Downloader API - Deno/TypeScript Port
- * Version: 1.0.8
+ * Version: 1.0.9
  * 
  * COMPLETE FIX for playlist progress tracking and cross-platform compatibility
  * 
@@ -16,7 +16,7 @@
  * 7. Playlist-named ZIP files: EDM.zip, Chill Vibes.zip, etc.
  * 8. NATIVE system commands for instant ZIP (PowerShell/zip) - 100x faster!
  * 
- * v1.0.8 Changes:
+ * v1.0.9 Changes:
  * - FIXED: Added routes for /login.html and /config.html
  * - Now you can access the admin panel and login page
  * 
@@ -107,6 +107,90 @@ await log.setup({
 
 // Port can be set via: --port flag > PORT env var > default 8000
 let PORT = parseInt(Deno.env.get("PORT") || "8000");
+
+// ============================================================================
+// EMBEDDED PUBLIC ASSETS (deno compile --include public/)
+// ============================================================================
+
+const EMBED_PUBLIC_URL = new URL("./public/", import.meta.url);
+
+function isRunningCompiledBinary(): boolean {
+  return !Deno.execPath().toLowerCase().includes("deno");
+}
+
+function getStaticMimeType(path: string): string {
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".html")) return "text/html";
+  if (lower.endsWith(".js")) return "application/javascript";
+  if (lower.endsWith(".css")) return "text/css";
+  if (lower.endsWith(".json")) return "application/json";
+  if (lower.endsWith(".ico")) return "image/x-icon";
+  if (lower.endsWith(".svg")) return "image/svg+xml";
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  return "application/octet-stream";
+}
+
+async function readEmbeddedPublicFile(relativePath: string): Promise<Uint8Array> {
+  const safePath = relativePath.replaceAll("\\", "/");
+  const fileUrl = new URL(safePath, EMBED_PUBLIC_URL);
+  return await Deno.readFile(fileUrl);
+}
+
+async function readPublicTextFile(relativePath: string): Promise<string> {
+  const diskPath = join(PUBLIC_DIR, relativePath);
+  if (await exists(diskPath)) {
+    return await Deno.readTextFile(diskPath);
+  }
+  const data = await readEmbeddedPublicFile(relativePath);
+  return new TextDecoder().decode(data);
+}
+
+async function sendPublicFile(ctx: Context, relativePath: string): Promise<void> {
+  const diskPath = join(PUBLIC_DIR, relativePath);
+  if (await exists(diskPath)) {
+    await send(ctx, relativePath, { root: PUBLIC_DIR });
+    return;
+  }
+
+  const data = await readEmbeddedPublicFile(relativePath);
+  ctx.response.type = getStaticMimeType(relativePath);
+  ctx.response.body = data;
+}
+
+async function copyEmbeddedPublicDir(source: URL, destination: string): Promise<void> {
+  for await (const entry of Deno.readDir(source)) {
+    const srcUrl = new URL(`${entry.name}${entry.isDirectory ? "/" : ""}`, source);
+    const destPath = join(destination, entry.name);
+
+    if (entry.isDirectory) {
+      await Deno.mkdir(destPath, { recursive: true });
+      await copyEmbeddedPublicDir(srcUrl, destPath);
+      continue;
+    }
+
+    if (entry.isFile) {
+      const data = await Deno.readFile(srcUrl);
+      await Deno.writeFile(destPath, data);
+    }
+  }
+}
+
+async function ensurePublicAssetsExtracted(): Promise<void> {
+  if (!isRunningCompiledBinary()) return;
+
+  const indexPath = join(PUBLIC_DIR, "index.html");
+  if (await exists(indexPath)) return;
+
+  await Deno.mkdir(PUBLIC_DIR, { recursive: true });
+
+  try {
+    await copyEmbeddedPublicDir(EMBED_PUBLIC_URL, PUBLIC_DIR);
+    logInfo(`✓ Extracted embedded public assets to ${PUBLIC_DIR}`);
+  } catch (err) {
+    logWarning(`⚠ Failed to extract embedded public assets: ${err}`);
+  }
+}
 
 //function resolveYtDlpPath(): string {
 //  const envPath = Deno.env.get("YT_DLP_PATH");
@@ -1571,7 +1655,7 @@ async function ensureFfmpeg() {
 
     const res = await fetch(url, {
       headers: {
-        "User-Agent": "ytdl-api/1.0.8 (Deno)",
+        "User-Agent": "ytdl-api/1.0.9 (Deno)",
         "Accept": "application/octet-stream",
       },
     });
@@ -1620,6 +1704,8 @@ async function ensureFfmpeg() {
 // ROUTES
 // ============================================================================
 
+await ensurePublicAssetsExtracted();
+
 const router = new Router();
 
 router.get("/", async (ctx) => {
@@ -1641,13 +1727,13 @@ router.get("/", async (ctx) => {
       }
     }
 
-    const html = await Deno.readTextFile(join(PUBLIC_DIR, "index.html"));
+    const html = await readPublicTextFile("index.html");
     ctx.response.type = "text/html";
     ctx.response.body = html;
   } catch {
     ctx.response.body = {
       service: "YouTube Downloader API",
-      version: "1.0.8",
+      version: "1.0.9",
       status: "online",
       message: `Frontend not found. Deploy index.html to ${PUBLIC_DIR}`,
     };
@@ -1656,9 +1742,7 @@ router.get("/", async (ctx) => {
 
 router.get("/favicon.ico", async (ctx) => {
   try {
-    await send(ctx, "favicon.ico", {
-      root: PUBLIC_DIR,
-    });
+    await sendPublicFile(ctx, "favicon.ico");
   } catch {
     ctx.response.status = 404;
   }
@@ -1667,7 +1751,7 @@ router.get("/favicon.ico", async (ctx) => {
 // Serve login page
 router.get("/login.html", async (ctx) => {
   try {
-    const html = await Deno.readTextFile(join(PUBLIC_DIR, "login.html"));
+    const html = await readPublicTextFile("login.html");
     ctx.response.type = "text/html";
     ctx.response.body = html;
   } catch {
@@ -1679,7 +1763,7 @@ router.get("/login.html", async (ctx) => {
 // Serve config/admin page
 router.get("/config.html", async (ctx) => {
   try {
-    const html = await Deno.readTextFile(join(PUBLIC_DIR, "config.html"));
+    const html = await readPublicTextFile("config.html");
     ctx.response.type = "text/html";
     ctx.response.body = html;
   } catch {
@@ -1691,7 +1775,12 @@ router.get("/config.html", async (ctx) => {
 // Serve static JS files from public/
 router.get("/js/:file", async (ctx) => {
   try {
-    await send(ctx, ctx.params.file, { root: join(PUBLIC_DIR, "js") });
+    const file = ctx.params.file;
+    if (!file) {
+      ctx.response.status = 404;
+      return;
+    }
+    await sendPublicFile(ctx, `js/${file}`);
   } catch {
     ctx.response.status = 404;
   }
@@ -1700,7 +1789,7 @@ router.get("/js/:file", async (ctx) => {
 router.get("/health", (ctx) => {
   ctx.response.body = {
     service: "YouTube Downloader API",
-    version: "1.0.8",
+    version: "1.0.9",
     status: "online",
   };
 });
@@ -2474,7 +2563,7 @@ app.addEventListener("error", (evt) => {
 
 async function main() {
   logInfo("═".repeat(80));
-  logInfo("YouTube Downloader API v1.0.8");
+  logInfo("YouTube Downloader API v1.0.9");
   logInfo("═".repeat(80));
 
   await bootstrapEnvironment();
