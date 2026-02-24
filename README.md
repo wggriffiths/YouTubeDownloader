@@ -9,24 +9,30 @@
 **One-click deployment** • **Single binary** • **Auto-downloads dependencies** • **Modern UI**
 
 ![YouTube Downloader Interface](screenshot_main.png)
+![YouTube Downloader Interface](screenshot_queue.png)
 ![YouTube Downloader Interface](screenshot_login.png)
 ![YouTube Downloader Interface](screenshot_config.png)
 ![YouTube Downloader Interface](screenshot_logs.png)
 
 ---
 
-## ✨ Features
+  ## ✨ Features
 
-- 🎵 **Download YouTube videos** as MP3 or MP4
-- 📂 **Download entire playlists** as ZIP archives
-- 🔍 **Search YouTube** directly from the interface
-- 🌓 **Beautiful dark theme** UI
-- 🚀 **Single binary deployment** (~55MB)
-- 🤖 **Auto-downloads dependencies** (yt-dlp, ffmpeg)
-- 🧹 **Smart cleanup system** (3-phase: startup, periodic, post-download)
-- 🎯 **Edge case handling** (geo-blocked videos, playlist detection)
-- 🐳 **Docker support** (optional)
-- 💻 **Cross-platform** (Windows, Linux, macOS)
+  - 🎵 Download YouTube content as MP3 (audio) or MP4 (video)
+  - 📂 Download entire playlists with per-track progress and ZIP export
+  - 📋 Live download queue panel with status, progress, speed, ETA, and actions
+  - ♻️ Persistent queue recovery across restarts (filesystem-backed job state)
+  - ⏯️ Interrupted download recovery with manual resume support (--continue)
+  - ▶️ Built-in playback from queue (audio + video panel for video files)
+  - 🔍 Search YouTube directly from the interface
+  - 🔐 Auth + CSRF protection with optional API endpoint protection
+  - 🌐 Domain allowlist + rate limiting for safer download/search endpoints
+  - 🚀 Single binary deployment with self-contained runtime behavior
+  - 🤖 Auto-downloads dependencies (yt-dlp, ffmpeg)
+  - 🧹 Smart cleanup system (startup, periodic, and post-download cleanup)
+  - 🎯 Robust edge-case handling (geo-blocked items, playlist detection, disconnect-safe streaming)
+  - 💻 Cross-platform (Windows, Linux, macOS)
+  - 🐳 Docker support (optional)
 
 ---
 
