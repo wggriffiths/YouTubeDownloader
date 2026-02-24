@@ -167,7 +167,7 @@
         </div>
 
         <div id="setupNotice" class="setup-notice" style="display: none;">
-            <strong>First-time setup:</strong> Create an admin password to secure your YouTube Downloader.
+            <strong>First-time setup:</strong> Create an admin password and enter the setup token from server logs.
         </div>
 
         <div id="successMessage" class="success-message" style="display: none;"></div>
@@ -192,6 +192,29 @@
                 </div>
             </div>
 
+            <div class="form-group" id="confirmGroup" style="display: none;">
+                <label class="form-label">Confirm Password</label>
+                <input
+                    type="password"
+                    id="confirmPassword"
+                    class="form-input"
+                    autocomplete="new-password"
+                    placeholder="Re-enter your password"
+                >
+            </div>
+
+            <div class="form-group" id="setupTokenGroup" style="display: none;">
+                <label class="form-label">Setup Token</label>
+                <input
+                    type="text"
+                    id="setupToken"
+                    class="form-input"
+                    autocomplete="off"
+                    placeholder="Paste token from server logs"
+                >
+                <div class="form-hint">Check startup logs for: Setup token required for /auth/setup</div>
+            </div>
+
             <button type="submit" class="submit-btn" id="submitBtn">
                 Login
             </button>
@@ -204,9 +227,19 @@
 
         // Check URL parameters
         const params = new URLSearchParams(window.location.search);
+        const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''));
         const returnTo = params.get('return_to') || '/config.html';
         const errorParam = params.get('error');
         const msgParam = params.get('msg');
+        const setupTokenParam = hashParams.get('setup_token') || params.get('setup_token') || '';
+
+        function scrubSetupTokenFromUrl() {
+            const cleanSearch = new URLSearchParams(window.location.search);
+            cleanSearch.delete('setup_token');
+            const query = cleanSearch.toString();
+            const newUrl = `${window.location.pathname}${query ? `?${query}` : ''}`;
+            window.history.replaceState({}, document.title, newUrl);
+        }
 
         // Show messages based on URL params
         if (msgParam === 'logged_out') {
@@ -235,7 +268,40 @@
                     document.getElementById('subtitle').textContent = 'Initial Setup';
                     document.getElementById('setupNotice').style.display = 'block';
                     document.getElementById('passwordHint').style.display = 'block';
+                    document.getElementById('confirmGroup').style.display = 'block';
+                    document.getElementById('setupTokenGroup').style.display = 'block';
                     document.getElementById('submitBtn').textContent = 'Complete Setup';
+                    if (setupTokenParam) {
+                        document.getElementById('setupToken').value = setupTokenParam;
+                        scrubSetupTokenFromUrl();
+                        document.getElementById('password').focus();
+                    } else if (data.setup_token) {
+                        document.getElementById('setupToken').value = data.setup_token;
+                        document.getElementById('password').focus();
+                    } else {
+                        try {
+                            const tokenResp = await fetch(`${API_URL}/auth/setup-token`, {
+                                credentials: 'include'
+                            });
+                            if (tokenResp.ok) {
+                                const tokenData = await tokenResp.json();
+                                if (tokenData.setup_token) {
+                                    document.getElementById('setupToken').value = tokenData.setup_token;
+                                    document.getElementById('password').focus();
+                                }
+                            } else {
+                                showMessage(
+                                    'setupNotice',
+                                    `<strong>First-time setup:</strong> Create an admin password and enter the setup token from server logs. (Auto-fill unavailable: ${tokenResp.status})`
+                                );
+                            }
+                        } catch (_err) {
+                            showMessage(
+                                'setupNotice',
+                                '<strong>First-time setup:</strong> Create an admin password and enter the setup token from server logs. (Auto-fill unavailable)'
+                            );
+                        }
+                    }
                 }
             } catch (error) {
                 showError('Failed to connect to API');
@@ -253,12 +319,28 @@
                 showError('Password must be at least 8 characters');
                 return;
             }
+
+            if (isSetup) {
+                const confirm = document.getElementById('confirmPassword').value;
+                if (password !== confirm) {
+                    showError('Passwords do not match');
+                    return;
+                }
+                const setupToken = document.getElementById('setupToken').value.trim();
+                if (!setupToken) {
+                    showError('Setup token is required');
+                    return;
+                }
+            }
             
             submitBtn.disabled = true;
             submitBtn.textContent = 'Please wait...';
             
             try {
                 const endpoint = isSetup ? '/auth/setup' : '/auth/login';
+                const payload = isSetup
+                    ? { password, setup_token: document.getElementById('setupToken').value.trim() }
+                    : { password };
                 
                 const response = await fetch(`${API_URL}${endpoint}`, {
                     method: 'POST',
@@ -266,7 +348,7 @@
                         'Content-Type': 'application/json'
                     },
                     credentials: 'include',
-                    body: JSON.stringify({ password })
+                    body: JSON.stringify(payload)
                 });
                 
                 const data = await response.json();

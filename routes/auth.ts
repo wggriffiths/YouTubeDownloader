@@ -1,4 +1,4 @@
-import { Router } from "https://deno.land/x/oak@v12.6.1/mod.ts";
+import { Router, type Context } from "https://deno.land/x/oak@v12.6.1/mod.ts";
 import { 
   checkSetup, 
   setupPassword, 
@@ -14,20 +14,84 @@ import {
   recordFailedAttempt,
   clearFailedAttempts
 } from "../session.ts";
+import { loadConfig } from "../config.ts";
 
 const authRouter = new Router();
+let setupToken = crypto.randomUUID();
+let setupTokenAnnounced = false;
+
+function normalizeIp(ip: string): string {
+  if (!ip) return "unknown";
+  if (ip === "::1") return "127.0.0.1";
+  if (ip.startsWith("::ffff:")) return ip.slice(7);
+  return ip;
+}
+
+function isLocalRequestIp(ip: string): boolean {
+  const n = normalizeIp(ip);
+  if (n === "127.0.0.1" || n === "localhost") return true;
+  if (n.startsWith("10.")) return true;
+  if (n.startsWith("192.168.")) return true;
+  if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(n)) return true;
+  if (n.startsWith("169.254.")) return true;
+  return false;
+}
+
+function isLocalRequest(ctx: Context): boolean {
+  if (isLocalRequestIp(ctx.request.ip)) return true;
+  const host = (ctx.request.url.hostname || "").toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+async function announceSetupTokenIfNeeded(): Promise<void> {
+  if (setupTokenAnnounced) return;
+  try {
+    const config = await loadConfig();
+    if (!config.password_hash) {
+      setupTokenAnnounced = true;
+      console.log(`[SECURITY] Setup token required for /auth/setup: ${setupToken}`);
+    }
+  } catch {
+    // ignore
+  }
+}
 
 // GET /auth/check - Check if setup is complete
 authRouter.get("/auth/check", async (ctx) => {
+  await announceSetupTokenIfNeeded();
   const response = await checkSetup();
+  if (!response.setup_complete) {
+    (response as { setup_token?: string }).setup_token = setupToken;
+  }
   ctx.response.body = response;
+});
+
+// GET /auth/setup-token - Local-only convenience endpoint for first-time setup
+authRouter.get("/auth/setup-token", async (ctx) => {
+  await announceSetupTokenIfNeeded();
+  const setup = await checkSetup();
+  if (setup.setup_complete) {
+    ctx.response.status = 404;
+    ctx.response.body = { error: "Setup already completed" };
+    return;
+  }
+
+  if (!isLocalRequest(ctx)) {
+    ctx.response.status = 403;
+    ctx.response.body = { error: "Forbidden" };
+    return;
+  }
+
+  ctx.response.body = { setup_token: setupToken };
 });
 
 // POST /auth/setup - Initial setup (create password)
 authRouter.post("/auth/setup", async (ctx) => {
   try {
+    await announceSetupTokenIfNeeded();
     const body = await ctx.request.body({ type: "json" }).value;
     const password = body.password;
+    const setupTokenProvided = body.setup_token;
     
     if (!password) {
       ctx.response.status = 400;
@@ -37,13 +101,27 @@ authRouter.post("/auth/setup", async (ctx) => {
       };
       return;
     }
+
+    if (!setupTokenProvided || setupTokenProvided !== setupToken) {
+      ctx.response.status = 403;
+      ctx.response.body = {
+        success: false,
+        message: "Invalid setup token",
+      };
+      return;
+    }
     
-    const response = await setupPassword(password);
+    const ip = ctx.request.ip;
+    const userAgent = ctx.request.headers.get("User-Agent") || "unknown";
+    const response = await setupPassword(password, ip, userAgent);
     
     if (response.success && response.token) {
       // Set secure session cookie
       const isSecure = ctx.request.secure || ctx.request.headers.get("x-forwarded-proto") === "https";
       setSessionCookie(ctx, response.token, isSecure);
+      // Rotate token after successful setup.
+      setupToken = crypto.randomUUID();
+      setupTokenAnnounced = false;
     }
     
     ctx.response.body = response;

@@ -1,4 +1,3 @@
-import { loadConfig } from "../config.ts";
 //import { YT_DLP_PATH } from "../api.ts";
 import { YT_DLP_PATH } from "../paths.ts";
 

@@ -128,12 +128,42 @@ async function windowsStop(): Promise<void> {
     Deno.exit(1);
   }
 
-  const r = await run("sc.exe", ["stop", SERVICE_NAME]);
-  if (r.code === 0) {
-    console.log(`Service '${SERVICE_NAME}' stopped.`);
+  // sc.exe stop blocks until the service reports STOPPED, but the service
+  // process may exit (Deno.exit) before SCM receives that status, causing
+  // sc.exe to hang forever. Use spawn + timeout instead.
+  const cmd = new Deno.Command("sc.exe", {
+    args: ["stop", SERVICE_NAME],
+    stdout: "piped",
+    stderr: "piped",
+  });
+  const child = cmd.spawn();
+
+  const timeout = new Promise<null>((res) => setTimeout(() => res(null), 5000));
+  const result = await Promise.race([child.output(), timeout]);
+
+  if (result === null) {
+    // sc.exe hung — service likely stopped but didn't report cleanly
+    try { child.kill(); } catch { /* already exited */ }
+
+    // Poll sc.exe query to verify it actually stopped
+    for (let i = 0; i < 3; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const q = await run("sc.exe", ["query", SERVICE_NAME]);
+      if (q.stdout.includes("STOPPED")) {
+        console.log(`Service '${SERVICE_NAME}' stopped.`);
+        return;
+      }
+    }
+    console.log(`Stop signal sent to '${SERVICE_NAME}'.`);
   } else {
-    console.error(`Failed to stop service: ${r.stderr || r.stdout}`);
-    Deno.exit(1);
+    const stdout = new TextDecoder().decode(result.stdout);
+    const stderr = new TextDecoder().decode(result.stderr);
+    if (result.code === 0) {
+      console.log(`Service '${SERVICE_NAME}' stopped.`);
+    } else {
+      console.error(`Failed to stop service: ${stderr || stdout}`);
+      Deno.exit(1);
+    }
   }
 }
 
@@ -218,6 +248,13 @@ export async function runAsWindowsService(appMain: () => Promise<void>): Promise
       if (control === SERVICE_CONTROL_STOP) {
         setServiceStatus(SERVICE_STOP_PENDING, 0, 1, 5000);
         stopResolve?.();
+        // Schedule a forced STOPPED + exit after a short delay in case the
+        // normal shutdown path gets stuck (Oak server, intervals, etc.)
+        setTimeout(() => {
+          setServiceStatus(SERVICE_STOPPED);
+          // Small delay so SCM receives the STOPPED status before process dies
+          setTimeout(() => Deno.exit(0), 500);
+        }, 3000);
       }
     },
   );
@@ -282,8 +319,14 @@ export async function runAsWindowsService(appMain: () => Promise<void>): Promise
   await stopPromise;
   setServiceStatus(SERVICE_STOPPED);
 
+  // Give SCM a moment to receive the STOPPED status before tearing down
+  await new Promise((r) => setTimeout(r, 500));
+
   ctrlHandler.close();
   serviceMain.close();
+
+  // Force exit — Oak server / intervals may keep the event loop alive
+  Deno.exit(0);
 }
 
 /** Encode a string as null-terminated UTF-16LE bytes. */

@@ -27,6 +27,17 @@ export interface Config {
   max_duration: number;
   max_file_size: number;
   id3_comment: string;
+  cleanup_enabled: boolean;
+  cleanup_interval: number;
+  cleanup_max_age: number;
+  startup_cleanup: boolean;
+  session_timeout: number;
+  require_auth_home: boolean;
+  require_auth_api: boolean;
+  cors_allowed_origins: string[];
+  allowed_download_domains: string[];
+  rate_limit_search_per_minute: number;
+  rate_limit_download_per_minute: number;
   password_hash?: string;
 }
 
@@ -39,6 +50,17 @@ const DEFAULT_CONFIG: Config = {
   max_duration: 600,
   max_file_size: 500,
   id3_comment: "Downloaded via YouTube API",
+  cleanup_enabled: true,
+  cleanup_interval: 5,
+  cleanup_max_age: 10,
+  startup_cleanup: true,
+  session_timeout: 30,
+  require_auth_home: false,
+  require_auth_api: false,
+  cors_allowed_origins: [],
+  allowed_download_domains: ["youtube.com", "youtu.be"],
+  rate_limit_search_per_minute: 30,
+  rate_limit_download_per_minute: 15,
 };
 
 // ============================================================================
@@ -107,6 +129,98 @@ export function validateConfig(update: Partial<Config>) {
     }
   }
 
+  if (update.cleanup_enabled !== undefined) {
+    if (typeof update.cleanup_enabled !== "boolean") {
+      errors.push("cleanup_enabled must be a boolean");
+    }
+  }
+
+  if (update.cleanup_interval !== undefined) {
+    if (
+      typeof update.cleanup_interval !== "number" ||
+      update.cleanup_interval < 1 ||
+      update.cleanup_interval > 120
+    ) {
+      errors.push("cleanup_interval must be between 1 and 120 minutes");
+    }
+  }
+
+  if (update.cleanup_max_age !== undefined) {
+    if (
+      typeof update.cleanup_max_age !== "number" ||
+      update.cleanup_max_age < 1 ||
+      update.cleanup_max_age > 1440
+    ) {
+      errors.push("cleanup_max_age must be between 1 and 1440 minutes");
+    }
+  }
+
+  if (update.startup_cleanup !== undefined) {
+    if (typeof update.startup_cleanup !== "boolean") {
+      errors.push("startup_cleanup must be a boolean");
+    }
+  }
+
+  if (update.session_timeout !== undefined) {
+    if (
+      typeof update.session_timeout !== "number" ||
+      update.session_timeout < 5 ||
+      update.session_timeout > 1440
+    ) {
+      errors.push("session_timeout must be between 5 and 1440 minutes");
+    }
+  }
+
+  if (update.require_auth_home !== undefined) {
+    if (typeof update.require_auth_home !== "boolean") {
+      errors.push("require_auth_home must be a boolean");
+    }
+  }
+
+  if (update.require_auth_api !== undefined) {
+    if (typeof update.require_auth_api !== "boolean") {
+      errors.push("require_auth_api must be a boolean");
+    }
+  }
+
+  if (update.cors_allowed_origins !== undefined) {
+    if (
+      !Array.isArray(update.cors_allowed_origins) ||
+      !update.cors_allowed_origins.every((v) => typeof v === "string")
+    ) {
+      errors.push("cors_allowed_origins must be an array of strings");
+    }
+  }
+
+  if (update.allowed_download_domains !== undefined) {
+    if (
+      !Array.isArray(update.allowed_download_domains) ||
+      !update.allowed_download_domains.every((v) => typeof v === "string")
+    ) {
+      errors.push("allowed_download_domains must be an array of strings");
+    }
+  }
+
+  if (update.rate_limit_search_per_minute !== undefined) {
+    if (
+      typeof update.rate_limit_search_per_minute !== "number" ||
+      update.rate_limit_search_per_minute < 1 ||
+      update.rate_limit_search_per_minute > 600
+    ) {
+      errors.push("rate_limit_search_per_minute must be between 1 and 600");
+    }
+  }
+
+  if (update.rate_limit_download_per_minute !== undefined) {
+    if (
+      typeof update.rate_limit_download_per_minute !== "number" ||
+      update.rate_limit_download_per_minute < 1 ||
+      update.rate_limit_download_per_minute > 300
+    ) {
+      errors.push("rate_limit_download_per_minute must be between 1 and 300");
+    }
+  }
+
   return {
     valid: errors.length === 0,
     errors,
@@ -118,8 +232,12 @@ export function validateConfig(update: Partial<Config>) {
 // ============================================================================
 
 export function sanitizeString(input: string): string {
-  let cleaned = input.replace(/\0/g, "");
-  cleaned = cleaned.replace(/[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F]/g, "");
+  let cleaned = "";
+  for (const ch of input) {
+    const code = ch.charCodeAt(0);
+    const isControl = (code >= 0x00 && code <= 0x1f) || code === 0x7f;
+    if (!isControl) cleaned += ch;
+  }
   return cleaned.trim();
 }
 

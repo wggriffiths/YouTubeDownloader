@@ -6,23 +6,6 @@
  * 
  * COMPLETE FIX for playlist progress tracking and cross-platform compatibility
  * 
- * v1.0.8 Changes:
- * Key fixes:
- * 1. Static file paths (index.html, login.html, config.html, favicon.ico) changed from relative ./public/ to absolute
- * PUBLIC_DIR so they resolve correctly when Windows SCM sets CWD to C:\Windows\System32
- * - Windows service management via sc.exe and advapi32 FFI handshake
- * - Linux service management via systemd unit files
- * - Commands: install, uninstall, start, stop
- * - Full CLI argument parser with --help, --version, --port
- *
- * Modified: api.ts
- * - Entry point now calls handleCli() instead of handleServiceCommand()
- * - Supports --port flag to override server port
- * - Uses --service flag for Windows SCM launch mode
- * - Fixed hardcoded "./public/" paths to use PUBLIC_DIR 
- *   (resolved from exe location) * so pages load correctly when running as a service
- *
- * v1.0.7 Changes:
  * Key fixes:
  * 1. Auto-detect playlists from URL (frontend compatibility)
  * 2. Read from stdout with proper flags (--newline, --progress)
@@ -32,10 +15,11 @@
  * 6. Cross-platform ZIP creation (Windows/Linux/Mac)
  * 7. Playlist-named ZIP files: EDM.zip, Chill Vibes.zip, etc.
  * 8. NATIVE system commands for instant ZIP (PowerShell/zip) - 100x faster!
- *
+ * 
+ * v1.0.8 Changes:
  * - FIXED: Added routes for /login.html and /config.html
  * - Now you can access the admin panel and login page
- *
+ * 
  * v1.0.6 Changes:
  * - SECURITY: Added session-based authentication system
  * - SECURITY: Argon2id password hashing
@@ -70,18 +54,19 @@
  * - Applies to both single downloads and playlists
  */
 
-import { loadConfig } from "./config.ts";
+import { loadConfig, saveConfig } from "./config.ts";
 import { handleCli, isRunningAsService, runAsWindowsService } from "./service.ts";
-import type { CliOptions } from "./service.ts";
-import { join, resolve, dirname, fromFileUrl} from "https://deno.land/std@0.202.0/path/mod.ts";
+import { join, basename } from "https://deno.land/std@0.202.0/path/mod.ts";
 import { Application, Router, send } from "https://deno.land/x/oak@v12.6.1/mod.ts";
-import { oakCors } from "https://deno.land/x/cors@v1.2.2/mod.ts";
+import type { Context, Next } from "https://deno.land/x/oak@v12.6.1/mod.ts";
 import { exists } from "https://deno.land/std@0.208.0/fs/mod.ts";
 
 // ============================================================================
 // SECURITY IMPORTS
 // ============================================================================
 import { securityHeadersMiddleware } from "./middleware/security.ts";
+import { getSessionIdFromContext } from "./session.ts";
+import { validateSession } from "./auth.ts";
 import authRouter from "./routes/auth.ts";
 import adminRouter from "./routes/admin.ts";
 
@@ -96,7 +81,6 @@ import {
   LOGS_DIR,
   CONFIG_FILE,
   YT_DLP_PATH,
-  FFMPEG_PATH,
   DENO_PATH
 } from "./paths.ts";
 
@@ -121,8 +105,6 @@ await log.setup({
   },
 });
 
-const logger = log.getLogger();
-
 // Port can be set via: --port flag > PORT env var > default 8000
 let PORT = parseInt(Deno.env.get("PORT") || "8000");
 
@@ -144,7 +126,7 @@ let PORT = parseInt(Deno.env.get("PORT") || "8000");
 // TYPES
 // ============================================================================
 
-type JobStatus = "pending" | "processing" | "completed" | "failed" | "playlist";
+type JobStatus = "pending" | "processing" | "completed" | "failed" | "playlist" | "interrupted";
 
 interface Job {
   id: string;
@@ -158,14 +140,23 @@ interface Job {
   error?: string;
   file_path?: string;
   file_name?: string;
-  
+
+  // Progress tracking
+  percent?: number;            // 0-100
+  speed?: string;              // e.g. "3.2MiB/s"
+  eta?: string;                // e.g. "00:12"
+  file_size?: string;          // e.g. "9.8MiB"
+
   // Playlist-specific fields (match Python API exactly)
-  playlist_title?: string;     
+  playlist_title?: string;
   total_videos?: number;
   current_video?: number;
   current_title?: string;
   video_titles?: string[];
   skipped_videos?: string[];   // Track geo-blocked/unavailable
+
+  // Process handle for cancellation
+  _process?: Deno.ChildProcess;
 }
 
 interface DownloadRequest {
@@ -188,11 +179,268 @@ interface SearchResult {
   channel: string;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
 // ============================================================================
 // JOB STORE
 // ============================================================================
 
 const jobs = new Map<string, Job>();
+const lastStatusWrite = new Map<string, number>();
+const apiRateLimits = new Map<string, number[]>();
+
+const META_FILENAME = "metadata.json";
+const STATUS_FILENAME = "status.json";
+
+type StoredStatus = "queued" | "downloading" | "complete" | "failed" | "interrupted";
+
+function jobDir(jobId: string): string {
+  return join(DOWNLOADS_DIR, jobId);
+}
+
+function getClientIp(ctx: Context): string {
+  // Do not trust X-Forwarded-For by default; it is user-controlled unless a
+  // trusted reverse proxy is explicitly configured.
+  return ctx.request.ip;
+}
+
+function checkApiRateLimit(key: string, limit: number, windowMs: number): boolean {
+  const now = Date.now();
+  const hits = (apiRateLimits.get(key) || []).filter((t) => now - t < windowMs);
+  if (hits.length === 0) {
+    apiRateLimits.delete(key);
+  }
+  if (hits.length >= limit) {
+    apiRateLimits.set(key, hits);
+    return false;
+  }
+  hits.push(now);
+  apiRateLimits.set(key, hits);
+  return true;
+}
+
+// Periodically sweep stale rate-limit keys to bound memory growth.
+setInterval(() => {
+  const now = Date.now();
+  const maxWindowMs = 60_000; // current API rate-limits are per-minute windows
+  for (const [key, hits] of apiRateLimits.entries()) {
+    const recent = hits.filter((t) => now - t < maxWindowMs);
+    if (recent.length === 0) {
+      apiRateLimits.delete(key);
+    } else {
+      apiRateLimits.set(key, recent);
+    }
+  }
+}, 5 * 60_000);
+
+function getJobTitle(job: Job): string {
+  return (
+    job.playlist_title ||
+    job.current_title ||
+    job.file_name ||
+    job.url
+  );
+}
+
+function toStoredStatus(jobStatus: JobStatus): StoredStatus {
+  switch (jobStatus) {
+    case "pending":
+      return "queued";
+    case "processing":
+    case "playlist":
+      return "downloading";
+    case "completed":
+      return "complete";
+    case "failed":
+      return "failed";
+    case "interrupted":
+      return "interrupted";
+  }
+}
+
+function fromStoredStatus(stored: string): JobStatus {
+  switch (stored) {
+    case "queued":
+      return "pending";
+    case "downloading":
+      return "interrupted";
+    case "complete":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "interrupted":
+      return "interrupted";
+    default:
+      return "failed";
+  }
+}
+
+function getJobProgress(job: Job): number {
+  if (typeof job.percent === "number") return Math.max(0, Math.min(100, job.percent));
+  if (job.total_videos && job.current_video) {
+    return Math.max(0, Math.min(100, Math.round((job.current_video / job.total_videos) * 100)));
+  }
+  return 0;
+}
+
+async function writeJobMetadata(job: Job): Promise<void> {
+  const dir = jobDir(job.id);
+  await Deno.mkdir(dir, { recursive: true });
+  const metadata = {
+    id: job.id,
+    url: job.url,
+    title: getJobTitle(job),
+    created_at: job.created_at,
+    file_path: job.file_path || "",
+    format_type: job.format_type,
+    quality: job.quality,
+    playlist: job.playlist,
+    playlist_title: job.playlist_title || "",
+    total_videos: job.total_videos || 0,
+    current_video: job.current_video || 0,
+    video_titles: job.video_titles || [],
+    skipped_videos: job.skipped_videos || [],
+  };
+  await Deno.writeTextFile(join(dir, META_FILENAME), JSON.stringify(metadata, null, 2));
+}
+
+async function writeJobStatus(job: Job, force = false): Promise<void> {
+  const now = Date.now();
+  const last = lastStatusWrite.get(job.id) || 0;
+  if (!force && now - last < 1500) return;
+  lastStatusWrite.set(job.id, now);
+
+  const dir = jobDir(job.id);
+  await Deno.mkdir(dir, { recursive: true });
+  const status = {
+    status: toStoredStatus(job.status),
+    progress: getJobProgress(job),
+  };
+  await Deno.writeTextFile(join(dir, STATUS_FILENAME), JSON.stringify(status, null, 2));
+}
+
+async function findMediaFileForJob(jobId: string, formatType?: "audio" | "video"): Promise<string | null> {
+  const dir = jobDir(jobId);
+  const preferredExt = formatType === "video" ? [".mp4", ".mkv", ".webm"] : [".mp3", ".m4a", ".ogg", ".wav", ".flac"];
+  const fallbackExt = [".mp3", ".m4a", ".ogg", ".wav", ".flac", ".mp4", ".mkv", ".webm"];
+  const allowed = new Set([...preferredExt, ...fallbackExt]);
+  const candidates: string[] = [];
+
+  try {
+    for await (const entry of Deno.readDir(dir)) {
+      if (!entry.isFile) continue;
+      const name = entry.name.toLowerCase();
+      if (name === META_FILENAME || name === STATUS_FILENAME) continue;
+      if (name.includes(".part") || name.includes(".temp.")) continue;
+      if (![...allowed].some((ext) => name.endsWith(ext))) continue;
+      candidates.push(entry.name);
+    }
+  } catch {
+    return null;
+  }
+
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => a.localeCompare(b));
+  return join(dir, candidates[0]);
+}
+
+async function rebuildQueueFromDisk(): Promise<void> {
+  const config = await loadConfig();
+  if (config.startup_cleanup) {
+    logInfo("⏭ Queue rebuild skipped (startup cleanup enabled)");
+    return;
+  }
+
+  try {
+    await Deno.stat(DOWNLOADS_DIR);
+  } catch {
+    return;
+  }
+
+  for await (const entry of Deno.readDir(DOWNLOADS_DIR)) {
+    if (!entry.isDirectory) continue;
+
+    const dir = join(DOWNLOADS_DIR, entry.name);
+    const metaPath = join(dir, META_FILENAME);
+    const statusPath = join(dir, STATUS_FILENAME);
+
+    let meta: Record<string, unknown> | null = null;
+    let status: Record<string, unknown> = { status: "failed", progress: 0 };
+
+    try {
+      meta = asRecord(JSON.parse(await Deno.readTextFile(metaPath)));
+    } catch {
+      continue;
+    }
+    if (!meta) continue;
+
+    try {
+      const parsedStatus = asRecord(JSON.parse(await Deno.readTextFile(statusPath)));
+      if (parsedStatus) status = parsedStatus;
+    } catch {
+      // keep default failed status
+    }
+
+    const jobId = typeof meta.id === "string" && meta.id.trim() ? meta.id : entry.name;
+    const storedStatus = typeof status.status === "string" ? status.status : "failed";
+    const metaFilePath = typeof meta.file_path === "string" && meta.file_path ? meta.file_path : undefined;
+    const job: Job = {
+      id: jobId,
+      status: fromStoredStatus(storedStatus),
+      url: typeof meta.url === "string" ? meta.url : "",
+      format_type: meta.format_type === "video" ? "video" : "audio",
+      quality: typeof meta.quality === "string" && meta.quality ? meta.quality : "best",
+      playlist: !!meta.playlist,
+      created_at: typeof meta.created_at === "number" ? meta.created_at : Date.now(),
+      message: undefined,
+      error: undefined,
+      file_path: metaFilePath,
+      file_name: metaFilePath ? basename(metaFilePath) : undefined,
+      percent: typeof status.progress === "number" ? status.progress : undefined,
+      playlist_title: typeof meta.playlist_title === "string" && meta.playlist_title
+        ? meta.playlist_title
+        : undefined,
+      total_videos: typeof meta.total_videos === "number" ? meta.total_videos : undefined,
+      current_video: typeof meta.current_video === "number" ? meta.current_video : undefined,
+      video_titles: Array.isArray(meta.video_titles)
+        ? meta.video_titles.filter((v): v is string => typeof v === "string")
+        : undefined,
+      skipped_videos: Array.isArray(meta.skipped_videos)
+        ? meta.skipped_videos.filter((v): v is string => typeof v === "string")
+        : undefined,
+    };
+
+    // Validate completed files
+    if (job.status === "completed") {
+      if (!job.file_path || !await exists(job.file_path)) {
+        const resolvedPath = await findMediaFileForJob(job.id, job.format_type);
+        if (resolvedPath) {
+          job.file_path = resolvedPath;
+          job.file_name = basename(resolvedPath);
+        } else {
+          job.status = "failed";
+          job.error = "Output file missing after restart";
+        }
+      }
+    }
+
+    // If previously downloading, mark interrupted and persist
+    if (storedStatus === "downloading") {
+      job.status = "interrupted";
+    }
+
+    jobs.set(job.id, job);
+    await writeJobMetadata(job);
+    await writeJobStatus(job, true);
+  }
+
+  logInfo(`✓ Queue rebuild complete (${jobs.size} jobs)`);
+}
 
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -302,27 +550,65 @@ async function searchYouTube(query: string): Promise<SearchResult[]> {
   return results;
 }
 
-async function downloadVideo(job: Job) {
-  const jobId = job.id;
-  const downloadDir = await ensureDownloadDir(jobId);
+/**
+ * Parse a yt-dlp progress line and update job fields.
+ * Lines look like: [download]  67.3% of   9.80MiB at    3.21MiB/s ETA 00:12
+ *             or:  [download]  67.3% of ~  9.80MiB at    3.21MiB/s ETA 00:12
+ */
+function parseProgress(line: string, job: Job): boolean {
+  const m = line.match(
+    /\[download\]\s+([\d.]+)%\s+of\s+~?\s*([\d.]+\S+)\s+at\s+([\d.]+\S+)\s+ETA\s+(\S+)/i
+  );
+  if (m) {
+    job.percent = parseFloat(m[1]);
+    job.file_size = m[2];
+    job.speed = m[3];
+    job.eta = m[4];
+    return true;
+  }
+  // Also match 100% line: [download] 100% of 9.80MiB in 00:03
+  const m2 = line.match(/\[download\]\s+100%\s+of\s+~?\s*([\d.]+\S+)/i);
+  if (m2) {
+    job.percent = 100;
+    job.file_size = m2[1];
+    job.speed = undefined;
+    job.eta = undefined;
+    return true;
+  }
+  return false;
+}
 
-  job.status = "processing";
-  logInfo(`Starting download for job ${jobId}: ${job.url}`);
-
+/**
+ * Build cookie-related args for yt-dlp.
+ * Uses cookies.txt from BIN_DIR if present and non-empty.
+ */
+async function getCookieArgs(): Promise<string[]> {
   const cookiesPath = join(BIN_DIR, "cookies.txt");
 
-  let useCookies = false;
   try {
     const stat = await Deno.stat(cookiesPath);
     if (stat.isFile && stat.size > 0) {
-      useCookies = true;
       logInfo(`Using cookies file: ${cookiesPath}`);
+      return ["--cookies", cookiesPath];
     } else {
       logWarning(`Cookies file exists but is empty: ${cookiesPath}`);
     }
   } catch {
-    logInfo(`No cookies file found at: ${cookiesPath}`);
+    logWarning(`No cookies file found at: ${cookiesPath} — YouTube may block downloads`);
   }
+
+  return [];
+}
+
+async function downloadVideo(job: Job, resume = false) {
+  const jobId = job.id;
+  const downloadDir = await ensureDownloadDir(jobId);
+
+  job.status = "processing";
+  await writeJobStatus(job, true);
+  logInfo(`Starting download for job ${jobId}: ${job.url}`);
+
+  const cookieArgs = await getCookieArgs();
 
   // Build PATH so yt-dlp can find deno + ffmpeg inside ./bin
   const sep = Deno.build.os === "windows" ? ";" : ":";
@@ -332,17 +618,15 @@ async function downloadVideo(job: Job) {
   };
 
   const args: string[] = [
+    ...(resume ? ["--continue"] : []),
     "--no-playlist",
     "--ffmpeg-location", BIN_DIR,
+    ...cookieArgs,
     "--format",
     job.format_type === "video"
       ? `bestvideo[height<=${job.quality}]+bestaudio[ext=m4a]/best[height<=${job.quality}]`
       : "bestaudio",
   ];
-
-  if (useCookies) {
-    args.push("--cookies", cookiesPath);
-  }
 
   if (job.format_type === "audio") {
     args.push(
@@ -366,7 +650,11 @@ async function downloadVideo(job: Job) {
     );
   }
 
-  args.push(job.url);
+  args.push(
+    "--newline",                  // Force line-by-line progress output
+    "--progress",
+    job.url,
+  );
 
   const command = new Deno.Command(YT_DLP_PATH, {
     args,
@@ -376,82 +664,125 @@ async function downloadVideo(job: Job) {
     env,
   });
 
-  const { stderr, code } = await command.output();
+  const process = command.spawn();
+  job._process = process;
+
+  const decoder = new TextDecoder();
+  const stdoutReader = process.stdout.getReader();
+  const stderrReader = process.stderr.getReader();
+  let stderrText = "";
+
+  // Read stdout for progress
+  const readStdout = async () => {
+    let buffer = "";
+    try {
+      while (true) {
+        const { done, value } = await stdoutReader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          logDebug(`yt-dlp stdout: ${line.trim()}`);
+          if (parseProgress(line, job)) {
+            await writeJobStatus(job);
+          }
+          // Capture destination filename (strip media extensions for display)
+          const destMatch = line.match(/\[download\]\s+Destination:\s+.*[\/\\]([^\/\\]+?)\.(?:webm|m4a|opus|mp3|mp4|mkv|ogg|wav|flac)$/i);
+          if (destMatch) {
+            job.current_title = destMatch[1];
+            await writeJobMetadata(job);
+          }
+        }
+      }
+    } catch (err) {
+      logError(`Error reading stdout: ${err}`);
+    }
+  };
+
+  // Read stderr for errors
+  const readStderr = async () => {
+    let buffer = "";
+    try {
+      while (true) {
+        const { done, value } = await stderrReader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        buffer += chunk;
+        stderrText += chunk;
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (line.trim()) logDebug(`yt-dlp stderr: ${line.trim()}`);
+        }
+      }
+    } catch (err) {
+      logError(`Error reading stderr: ${err}`);
+    }
+  };
+
+  await Promise.all([readStdout(), readStderr()]);
+  const { code } = await process.status;
+  job._process = undefined;
 
   if (code !== 0) {
-    const error = new TextDecoder().decode(stderr);
     job.status = "failed";
-    job.error = error;
-    logError(`Download failed for job ${jobId}: ${error}`);
+    // Extract meaningful error from stderr
+    const errorLine = stderrText.split("\n").filter(l => l.includes("ERROR")).pop();
+    job.error = errorLine
+      ? errorLine.replace(/^ERROR:\s*(\[.*?\]\s*\S+:\s*)?/, "").trim()
+      : stderrText.trim() || "Download failed";
+    await writeJobStatus(job, true);
+    logError(`Download failed for job ${jobId}: ${job.error}`);
     return;
   }
 
-  const files: string[] = [];
-  for await (const entry of Deno.readDir(downloadDir)) {
-    if (entry.isFile) {
-      files.push(entry.name);
-    }
-  }
-
-  if (files.length === 0) {
+  const outputPath = await findMediaFileForJob(jobId, job.format_type);
+  if (!outputPath) {
     job.status = "failed";
     job.error = "No files downloaded";
+    await writeJobStatus(job, true);
     logError(`No files found for job ${jobId}`);
     return;
   }
 
   job.status = "completed";
-  job.file_name = files[0];
-  job.file_path = `${downloadDir}/${files[0]}`;
+  job.percent = 100;
+  job.file_name = basename(outputPath);
+  job.file_path = outputPath;
+  await writeJobMetadata(job);
+  await writeJobStatus(job, true);
 
   logInfo(`Download completed for job ${jobId}: ${job.file_name}`);
 }
 
-async function downloadPlaylist(job: Job) {
+async function downloadPlaylist(job: Job, resume = false) {
   const jobId = job.id;
   const downloadDir = await ensureDownloadDir(jobId);
 
   job.status = "playlist";
+  await writeJobStatus(job, true);
   logInfo(`╔${"═".repeat(78)}╗`);
   logInfo(`║ PLAYLIST DOWNLOAD STARTED: ${jobId.substring(0, 50).padEnd(50)} ║`);
   logInfo(`╚${"═".repeat(78)}╝`);
   logInfo(`URL: ${job.url}`);
 
-  const config = await loadConfig();
-
-  // Always resolve cookie file from ROOT_DIR + config
-  const cookiesPath = join(BIN_DIR, "cookies.txt");
-
-  let useCookies = false;
-
-  try {
-    const stat = await Deno.stat(cookiesPath);
-    if (stat.isFile && stat.size > 0) {
-      useCookies = true;
-      logInfo(`Using cookies file: ${cookiesPath}`);
-    } else {
-      logWarning(`Cookies file exists but is empty: ${cookiesPath}`);
-    }
-  } catch {
-    logInfo(`No cookies file found at: ${cookiesPath}`);
-  }
+  const cookieArgs = await getCookieArgs();
 
   const args: string[] = [
+    ...(resume ? ["--continue"] : []),
     "--yes-playlist",
     "--ignore-errors",            // Skip unavailable videos
-    "--no-warnings",              // Reduce noise
     "--newline",                  // Force line-by-line output
     "--progress",                 // Force progress display
     "--console-title",            // Additional progress info
+    ...cookieArgs,
     "--format",
     job.format_type === "video"
       ? `bestvideo[height<=${job.quality}]+bestaudio/best[height<=${job.quality}]`
       : "bestaudio",
   ];
-
-  if (useCookies) {
-    args.splice(1, 0, "--cookies", cookiesPath);
-  }
 
   if (job.format_type === "audio") {
     args.push(
@@ -508,6 +839,7 @@ async function downloadPlaylist(job: Job) {
   });
 
   const process = command.spawn();
+  job._process = process;
 
   const decoder = new TextDecoder();
   const stdoutReader = process.stdout.getReader();
@@ -544,6 +876,12 @@ async function downloadPlaylist(job: Job) {
           // Log EVERY line from yt-dlp for debugging
           logDebug(`yt-dlp stdout: ${line.trim()}`);
 
+          // Parse download progress (percent, speed, ETA, size)
+          if (parseProgress(line, job)) {
+            await writeJobStatus(job);
+            continue;
+          }
+
           // Pattern 1: [download] Downloading video N of M
           let match = line.match(/\[download\]\s+Downloading\s+(?:video|item)\s+(\d+)\s+of\s+(\d+)/i);
           if (match) {
@@ -552,7 +890,11 @@ async function downloadPlaylist(job: Job) {
             
             job.current_video = current;
             job.total_videos = total;
-            
+            job.current_title = "";  // clear stale title until new track's Destination line arrives
+            job.percent = 0;         // reset per-track progress
+            await writeJobMetadata(job);
+            await writeJobStatus(job, true);
+
             logInfo(`┌─────────────────────────────────────────┐`);
             logInfo(`│ PROGRESS: ${current}/${total} (${Math.round(current/total*100)}%)`.padEnd(42) + `│`);
             logInfo(`└─────────────────────────────────────────┘`);
@@ -570,6 +912,7 @@ async function downloadPlaylist(job: Job) {
               }
               logInfo(`⬇️  Downloading: ${title}`);
             }
+            await writeJobMetadata(job);
             continue;
           }
 
@@ -584,6 +927,7 @@ async function downloadPlaylist(job: Job) {
               }
             }
             logInfo(`🎵 Converted: ${title}`);
+            await writeJobMetadata(job);
             continue;
           }
 
@@ -599,17 +943,22 @@ async function downloadPlaylist(job: Job) {
           if (match) {
             const playlistTitle = match[1].trim();
             job.playlist_title = playlistTitle;
+            await writeJobMetadata(job);
             logInfo(`📋 Playlist: ${playlistTitle}`);
             continue;
           }
 
-          // Pattern 6: Geo-blocked / unavailable
-          match = line.match(/(?:unavailable|not available|blocked|ERROR)/i);
+          // Pattern 6: Geo-blocked / unavailable (only match yt-dlp specific error patterns)
+          match = line.match(/\[download\].*(?:unavailable|not available|geo[- ]?blocked|private video)/i);
+          if (!match) {
+            match = line.match(/^ERROR:.*(?:unavailable|not available|blocked|Sign in|private)/i);
+          }
           if (match) {
-            logInfo(`⚠️  Skipped unavailable video`);
+            logInfo(`⚠️  Skipped unavailable video: ${line.trim()}`);
             if (job.current_title && !job.skipped_videos?.includes(job.current_title)) {
               job.skipped_videos?.push(job.current_title);
             }
+            await writeJobMetadata(job);
             continue;
           }
         }
@@ -624,33 +973,37 @@ async function downloadPlaylist(job: Job) {
     }
   };
 
+  // Collect stderr errors so we can surface them in failure messages
+  const stderrErrors: string[] = [];
+
   // Read stderr for errors
   const readStderr = async () => {
     try {
       let buffer = "";
-      
+
       while (true) {
         const { done, value } = await stderrReader.read();
         if (done) break;
-        
+
         const chunk = decoder.decode(value, { stream: true });
         buffer += chunk;
-        
+
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
 
         for (const line of lines) {
           if (!line.trim()) continue;
-          
+
           // Log errors and warnings
           if (line.includes("ERROR") || line.includes("WARNING")) {
-            logError(`yt-dlp error: ${line.trim()}`);
+            logError(`yt-dlp: ${line.trim()}`);
+            stderrErrors.push(line.trim());
           } else {
             logDebug(`yt-dlp stderr: ${line.trim()}`);
           }
         }
       }
-      
+
       if (buffer.trim()) {
         logDebug(`yt-dlp stderr (final): ${buffer.trim()}`);
       }
@@ -664,6 +1017,7 @@ async function downloadPlaylist(job: Job) {
   logInfo(`Stream reading complete`);
 
   const { code } = await process.status;
+  job._process = undefined;
   logInfo(`yt-dlp exited with code: ${code}`);
 
   const fileExtension = job.format_type === "audio" ? ".mp3" : ".mp4";
@@ -682,9 +1036,6 @@ async function downloadPlaylist(job: Job) {
 
     if (stat.size === 0) continue;
 
-    const ageMs = Date.now() - stat.mtime!.getTime();
-    if (ageMs < 1000) continue;
-
     files.push(entry.name);
   }
 
@@ -693,6 +1044,7 @@ async function downloadPlaylist(job: Job) {
   // Override total_videos with actual successful files
   job.total_videos = files.length;
   job.current_video = files.length;
+  await writeJobMetadata(job);
 
   // Cleanup: Delete any leftover .temp.mp4 files
   for await (const entry of Deno.readDir(downloadDir)) {
@@ -709,10 +1061,20 @@ async function downloadPlaylist(job: Job) {
   // Only fail if we got NO files
   if (files.length === 0) {
     job.status = "failed";
-    job.error = code !== 0 
-      ? "All videos in playlist were unavailable or blocked" 
-      : "No files downloaded from playlist";
+    // Surface the actual yt-dlp error (e.g. "Sign in to confirm you're not a bot")
+    const lastError = stderrErrors.filter(e => e.includes("ERROR")).pop();
+    if (lastError) {
+      // Extract the meaningful part after "ERROR: [youtube] ID:"
+      const cleaned = lastError.replace(/^ERROR:\s*(\[.*?\]\s*\S+:\s*)?/, "").trim();
+      job.error = cleaned || lastError;
+    } else {
+      job.error = code !== 0
+        ? "All videos in playlist were unavailable or blocked"
+        : "No files downloaded from playlist";
+    }
     logError(`No ${fileExtension} files found for playlist job ${jobId} (exit code: ${code})`);
+    logError(`Last stderr errors: ${stderrErrors.slice(-3).join(" | ")}`);
+    await writeJobStatus(job, true);
     return;
   }
 
@@ -796,6 +1158,7 @@ async function downloadPlaylist(job: Job) {
     logError(`Failed to create ZIP archive: ${zipError}`);
     job.status = "failed";
     job.error = `Failed to create ZIP archive: ${zipError}`;
+    await writeJobStatus(job, true);
     return;
   }
 
@@ -803,6 +1166,8 @@ async function downloadPlaylist(job: Job) {
   job.file_name = zipFileName;
   job.file_path = zipPath;
   job.message = `Downloaded ${files.length} videos`;
+  await writeJobMetadata(job);
+  await writeJobStatus(job, true);
   
   if (job.skipped_videos && job.skipped_videos.length > 0) {
     job.message += ` (${job.skipped_videos.length} unavailable)`;
@@ -821,6 +1186,12 @@ async function downloadPlaylist(job: Job) {
 // ============================================================================
 
 async function cleanupOrphanedFolders() {
+  const config = await loadConfig();
+  if (!config.startup_cleanup) {
+    logInfo("⏭ Startup cleanup disabled in config");
+    return;
+  }
+
   logInfo("✓ Running startup cleanup...");
 
   try {
@@ -854,16 +1225,20 @@ async function cleanupOrphanedFolders() {
 
 async function periodicCleanup() {
   while (true) {
-    await new Promise(resolve => setTimeout(resolve, 300000)); // 5 minutes
+    const config = await loadConfig();
+    const intervalMs = (config.cleanup_interval ?? 5) * 60_000;
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+
+    if (!config.cleanup_enabled) continue;
 
     try {
       const now = Date.now();
-      const maxAge = 600000; // 10 minutes
+      const maxAgeMs = (config.cleanup_max_age ?? 10) * 60_000;
 
       for (const [jobId, job] of jobs.entries()) {
         const age = now - job.created_at;
 
-        if (age > maxAge && (job.status === "completed" || job.status === "failed")) {
+        if (age > maxAgeMs && job.status === "completed") {
           try {
             const folderPath = join(DOWNLOADS_DIR, jobId);
 
@@ -882,23 +1257,26 @@ async function periodicCleanup() {
         }
       }
 
-      // Remove orphaned folders
-      try {
-        await Deno.stat(DOWNLOADS_DIR);
+      // Remove orphaned folders only if startup_cleanup is enabled
+      // (On restart the jobs map is empty, so skip this unless explicitly opted-in)
+      if (config.startup_cleanup) {
+        try {
+          await Deno.stat(DOWNLOADS_DIR);
 
-        for await (const entry of Deno.readDir(DOWNLOADS_DIR)) {
-          if (entry.isDirectory && !jobs.has(entry.name)) {
-            try {
-              const folderPath = join(DOWNLOADS_DIR, entry.name);
-              await Deno.remove(folderPath, { recursive: true });
-              logInfo(`Periodic cleanup: removed orphaned folder ${entry.name}`);
-            } catch (e) {
-              logError(`Error removing orphaned folder ${entry.name}: ${e}`);
+          for await (const entry of Deno.readDir(DOWNLOADS_DIR)) {
+            if (entry.isDirectory && !jobs.has(entry.name)) {
+              try {
+                const folderPath = join(DOWNLOADS_DIR, entry.name);
+                await Deno.remove(folderPath, { recursive: true });
+                logInfo(`Periodic cleanup: removed orphaned folder ${entry.name}`);
+              } catch (e) {
+                logError(`Error removing orphaned folder ${entry.name}: ${e}`);
+              }
             }
           }
+        } catch {
+          // downloads directory doesn't exist
         }
-      } catch {
-        // downloads directory doesn't exist
       }
 
     } catch (e) {
@@ -908,16 +1286,21 @@ async function periodicCleanup() {
 }
 
 async function cleanupJobFiles(jobId: string) {
-  await new Promise(resolve => setTimeout(resolve, 600000)); // 10 minutes
-  
+  const config = await loadConfig();
+  if (!config.cleanup_enabled) return;
+
+  const delayMs = (config.cleanup_max_age ?? 10) * 60_000;
+  await new Promise(resolve => setTimeout(resolve, delayMs));
+
   try {
-    if (jobs.has(jobId)) {
+    const job = jobs.get(jobId);
+    if (job && job.status === "completed") {
       const folderPath = join(DOWNLOADS_DIR, jobId);
       if (await exists(folderPath)) {
         await Deno.remove(folderPath, { recursive: true });
         logInfo(`Cleaned up directory for job ${jobId}`);
       }
-      
+
       jobs.delete(jobId);
       logInfo(`Removed job ${jobId} from memory`);
     }
@@ -1101,6 +1484,23 @@ async function ensureYtDlp(): Promise<string> {
   return ytPath;
 }
 
+async function findFileRecursive(
+  dir: string,
+  matcher: (name: string) => boolean,
+): Promise<string | null> {
+  for await (const entry of Deno.readDir(dir)) {
+    const fullPath = join(dir, entry.name);
+    if (entry.isFile && matcher(entry.name)) {
+      return fullPath;
+    }
+    if (entry.isDirectory) {
+      const result = await findFileRecursive(fullPath, matcher);
+      if (result) return result;
+    }
+  }
+  return null;
+}
+
 async function ensureFfmpeg() {
   const isWindows = Deno.build.os === "windows";
   const isLinux = Deno.build.os === "linux";
@@ -1143,21 +1543,10 @@ async function ensureFfmpeg() {
 
     await unzip.output();
 
-    async function findFile(dir: string): Promise<string | null> {
-      for await (const entry of Deno.readDir(dir)) {
-        const fullPath = join(dir, entry.name);
-        if (entry.isFile && entry.name.toLowerCase() === "ffmpeg.exe") {
-          return fullPath;
-        }
-        if (entry.isDirectory) {
-          const result = await findFile(fullPath);
-          if (result) return result;
-        }
-      }
-      return null;
-    }
-
-    const found = await findFile(extractDir);
+    const found = await findFileRecursive(
+      extractDir,
+      (name) => name.toLowerCase() === "ffmpeg.exe",
+    );
     if (!found) throw new Error("ffmpeg.exe not found after extraction");
 
     await Deno.copyFile(found, ffmpegPath);
@@ -1206,21 +1595,7 @@ async function ensureFfmpeg() {
       throw new Error("FFmpeg extraction failed");
     }
 
-    async function findFile(dir: string): Promise<string | null> {
-      for await (const entry of Deno.readDir(dir)) {
-        const fullPath = join(dir, entry.name);
-        if (entry.isFile && entry.name === "ffmpeg") {
-          return fullPath;
-        }
-        if (entry.isDirectory) {
-          const result = await findFile(fullPath);
-          if (result) return result;
-        }
-      }
-      return null;
-    }
-
-    const found = await findFile(extractDir);
+    const found = await findFileRecursive(extractDir, (name) => name === "ffmpeg");
     if (!found) throw new Error("ffmpeg not found after extraction");
 
     await Deno.copyFile(found, ffmpegPath);
@@ -1249,10 +1624,27 @@ const router = new Router();
 
 router.get("/", async (ctx) => {
   try {
+    // Check if homepage requires authentication
+    const config = await loadConfig();
+    if (config.require_auth_home) {
+      const sessionId = getSessionIdFromContext(ctx);
+      if (!sessionId) {
+        ctx.response.redirect("/login.html");
+        return;
+      }
+      const ip = ctx.request.ip;
+      const userAgent = ctx.request.headers.get("User-Agent") || "unknown";
+      const session = await validateSession(sessionId, ip, userAgent);
+      if (!session) {
+        ctx.response.redirect("/login.html");
+        return;
+      }
+    }
+
     const html = await Deno.readTextFile(join(PUBLIC_DIR, "index.html"));
     ctx.response.type = "text/html";
     ctx.response.body = html;
-  } catch (e) {
+  } catch {
     ctx.response.body = {
       service: "YouTube Downloader API",
       version: "1.0.8",
@@ -1278,7 +1670,7 @@ router.get("/login.html", async (ctx) => {
     const html = await Deno.readTextFile(join(PUBLIC_DIR, "login.html"));
     ctx.response.type = "text/html";
     ctx.response.body = html;
-  } catch (e) {
+  } catch {
     ctx.response.status = 404;
     ctx.response.body = { error: "Login page not found" };
   }
@@ -1290,9 +1682,18 @@ router.get("/config.html", async (ctx) => {
     const html = await Deno.readTextFile(join(PUBLIC_DIR, "config.html"));
     ctx.response.type = "text/html";
     ctx.response.body = html;
-  } catch (e) {
+  } catch {
     ctx.response.status = 404;
     ctx.response.body = { error: "Config page not found" };
+  }
+});
+
+// Serve static JS files from public/
+router.get("/js/:file", async (ctx) => {
+  try {
+    await send(ctx, ctx.params.file, { root: join(PUBLIC_DIR, "js") });
+  } catch {
+    ctx.response.status = 404;
   }
 });
 
@@ -1304,8 +1705,387 @@ router.get("/health", (ctx) => {
   };
 });
 
+// Optional auth gate for public API endpoints
+async function apiAuthMiddleware(ctx: Context, next: Next) {
+  const config = await loadConfig();
+  if (!config.require_auth_api) {
+    await next();
+    return;
+  }
+
+  const sessionId = getSessionIdFromContext(ctx);
+  if (!sessionId) {
+    ctx.response.status = 401;
+    ctx.response.body = { error: "Authentication required" };
+    return;
+  }
+
+  const ip = ctx.request.ip;
+  const userAgent = ctx.request.headers.get("User-Agent") || "unknown";
+  const session = await validateSession(sessionId, ip, userAgent);
+
+  if (!session) {
+    ctx.response.status = 401;
+    ctx.response.body = { error: "Invalid or expired session" };
+    return;
+  }
+
+  ctx.state.session = session;
+  await next();
+}
+
+async function requireApiCsrf(ctx: Context): Promise<boolean> {
+  const config = await loadConfig();
+  if (!config.require_auth_api) return true;
+
+  const session = ctx.state.session;
+  if (!session) return false;
+
+  let csrfToken = ctx.request.headers.get("x-csrf-token") || "";
+  if (!csrfToken && ctx.request.method !== "GET") {
+    try {
+      const body = await ctx.request.body({ type: "json" }).value;
+      csrfToken = body?.csrf_token || "";
+    } catch {
+      // ignore
+    }
+  }
+
+  return !!csrfToken && csrfToken === session.csrf_token;
+}
+
+function isAllowedDownloadUrl(rawUrl: string, allowedDomains: string[]): boolean {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+
+  const host = url.hostname.toLowerCase();
+  return allowedDomains.some((domain) => {
+    const d = domain.toLowerCase();
+    return host === d || host.endsWith(`.${d}`);
+  });
+}
+
+function getMimeTypeFromPath(path: string): string {
+  const lower = path.toLowerCase();
+  if (lower.endsWith(".mp3")) return "audio/mpeg";
+  if (lower.endsWith(".mp4")) return "video/mp4";
+  if (lower.endsWith(".m4a")) return "audio/mp4";
+  if (lower.endsWith(".wav")) return "audio/wav";
+  if (lower.endsWith(".flac")) return "audio/flac";
+  if (lower.endsWith(".ogg")) return "audio/ogg";
+  return "application/octet-stream";
+}
+
+function parseRangeHeader(rangeHeader: string, fileSize: number): { start: number; end: number } | null {
+  const match = rangeHeader.match(/^bytes=(\d*)-(\d*)$/i);
+  if (!match) return null;
+
+  const rawStart = match[1];
+  const rawEnd = match[2];
+
+  let start = rawStart ? Number(rawStart) : 0;
+  let end = rawEnd ? Number(rawEnd) : fileSize - 1;
+
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  if (start < 0) start = 0;
+  if (end >= fileSize) end = fileSize - 1;
+  if (start > end || start >= fileSize) return null;
+
+  return { start, end };
+}
+
+async function streamFileWithAbortHandling(ctx: Context, filePath: string): Promise<void> {
+  const stat = await Deno.stat(filePath);
+  const fileSize = stat.size;
+  const rangeHeader = ctx.request.headers.get("range");
+  const parsedRange = rangeHeader ? parseRangeHeader(rangeHeader, fileSize) : null;
+  const start = parsedRange ? parsedRange.start : 0;
+  const end = parsedRange ? parsedRange.end : Math.max(fileSize - 1, 0);
+  let remaining = parsedRange ? end - start + 1 : fileSize;
+
+  const file = await Deno.open(filePath, { read: true });
+  await file.seek(start, Deno.SeekMode.Start);
+
+  let closed = false;
+  const safeClose = () => {
+    if (closed) return;
+    closed = true;
+    try {
+      file.close();
+    } catch {
+      // ignore close races
+    }
+  };
+
+  const requestSignal: AbortSignal | undefined = (ctx.request as unknown as { source?: { signal?: AbortSignal } }).source?.signal;
+  if (requestSignal) {
+    const onAbort = () => safeClose();
+    requestSignal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (remaining <= 0) {
+        safeClose();
+        controller.close();
+        return;
+      }
+
+      const chunkSize = Math.min(64 * 1024, remaining);
+      const buffer = new Uint8Array(chunkSize);
+
+      try {
+        const bytesRead = await file.read(buffer);
+        if (bytesRead === null || bytesRead === 0) {
+          safeClose();
+          controller.close();
+          return;
+        }
+        remaining -= bytesRead;
+        controller.enqueue(bytesRead === buffer.length ? buffer : buffer.subarray(0, bytesRead));
+      } catch (err) {
+        safeClose();
+        // Suppress expected disconnect noise on streaming endpoints.
+        if (isClientAbortError(err)) {
+          controller.close();
+          return;
+        }
+        controller.error(err);
+      }
+    },
+    cancel() {
+      safeClose();
+    },
+  });
+
+  ctx.response.status = parsedRange ? 206 : 200;
+  ctx.response.type = getMimeTypeFromPath(filePath);
+  ctx.response.headers.set("Accept-Ranges", "bytes");
+  ctx.response.headers.set("Content-Length", String(parsedRange ? end - start + 1 : fileSize));
+  if (parsedRange) {
+    ctx.response.headers.set("Content-Range", `bytes ${start}-${end}/${fileSize}`);
+  }
+  ctx.response.body = stream;
+}
+
+// Apply auth gate to public API endpoints (when enabled)
+router.use(
+  ["/queue", "/search", "/download", "/status", "/stream"],
+  apiAuthMiddleware,
+);
+
+router.get("/queue", (ctx) => {
+  const queue = [];
+  for (const [id, job] of jobs.entries()) {
+    queue.push({
+      id,
+      status: job.status,
+      created_at: job.created_at,
+      url: job.url,
+      format_type: job.format_type,
+      file_name: job.file_name || null,
+      percent: job.percent ?? null,
+      speed: job.speed || null,
+      eta: job.eta || null,
+      file_size: job.file_size || null,
+      playlist_title: job.playlist_title || null,
+      current_video: job.current_video || null,
+      total_videos: job.total_videos || null,
+      current_title: job.current_title || null,
+      video_titles: job.status === "completed" ? (job.video_titles || []) : [],
+      error: job.error || null,
+    });
+  }
+  ctx.response.body = { jobs: queue };
+});
+
+// Cancel a running download
+router.post("/queue/:jobId/cancel", async (ctx) => {
+  if (!(await requireApiCsrf(ctx))) {
+    ctx.response.status = 403;
+    ctx.response.body = { error: "CSRF token validation failed" };
+    return;
+  }
+
+  const jobId = ctx.params.jobId;
+  const job = jobs.get(jobId);
+
+  if (!job) {
+    ctx.response.status = 404;
+    ctx.response.body = { error: "Job not found" };
+    return;
+  }
+
+  if (job._process) {
+    try {
+      job._process.kill("SIGTERM");
+    } catch {
+      // process may already be dead
+    }
+  }
+
+  job.status = "failed";
+  job.error = "Cancelled by user";
+  job._process = undefined;
+  await writeJobStatus(job, true);
+
+  // Clean up files
+  try {
+    const folderPath = join(DOWNLOADS_DIR, jobId);
+    await Deno.stat(folderPath);
+    await Deno.remove(folderPath, { recursive: true });
+  } catch { /* folder may not exist */ }
+
+  ctx.response.body = { success: true };
+});
+
+// Resume an interrupted download
+router.post("/queue/:jobId/resume", async (ctx) => {
+  if (!(await requireApiCsrf(ctx))) {
+    ctx.response.status = 403;
+    ctx.response.body = { error: "CSRF token validation failed" };
+    return;
+  }
+
+  const jobId = ctx.params.jobId;
+  const job = jobs.get(jobId);
+
+  if (!job) {
+    ctx.response.status = 404;
+    ctx.response.body = { error: "Job not found" };
+    return;
+  }
+
+  if (job.status !== "interrupted") {
+    ctx.response.status = 400;
+    ctx.response.body = { error: "Job is not in an interrupted state" };
+    return;
+  }
+
+  job.status = "pending";
+  job.error = undefined;
+  await writeJobStatus(job, true);
+
+  if (job.playlist) {
+    downloadPlaylist(job, true).catch(e => {
+      logError(`Playlist resume error: ${e}`);
+      job.status = "failed";
+      job.error = String(e);
+      writeJobStatus(job, true);
+    });
+  } else {
+    downloadVideo(job, true).catch(e => {
+      logError(`Video resume error: ${e}`);
+      job.status = "failed";
+      job.error = String(e);
+      writeJobStatus(job, true);
+    });
+  }
+
+  ctx.response.body = { success: true };
+});
+
+// Remove a job from the queue (completed/failed only)
+router.delete("/queue/:jobId", async (ctx) => {
+  if (!(await requireApiCsrf(ctx))) {
+    ctx.response.status = 403;
+    ctx.response.body = { error: "CSRF token validation failed" };
+    return;
+  }
+
+  const jobId = ctx.params.jobId;
+  const job = jobs.get(jobId);
+
+  if (!job) {
+    ctx.response.status = 404;
+    ctx.response.body = { error: "Job not found" };
+    return;
+  }
+
+  // Clean up files
+  try {
+    const folderPath = join(DOWNLOADS_DIR, jobId);
+    await Deno.stat(folderPath);
+    await Deno.remove(folderPath, { recursive: true });
+  } catch { /* folder may not exist */ }
+
+  jobs.delete(jobId);
+  ctx.response.body = { success: true };
+});
+
+// Manual cleanup (admin-only)
+router.post("/admin/cleanup-now", async (ctx) => {
+  // Auth check
+  const sessionId = getSessionIdFromContext(ctx);
+  if (!sessionId) { ctx.response.status = 401; ctx.response.body = { error: "Auth required" }; return; }
+  const session = await validateSession(sessionId, ctx.request.ip, ctx.request.headers.get("User-Agent") || "unknown");
+  if (!session) { ctx.response.status = 401; ctx.response.body = { error: "Invalid session" }; return; }
+
+  // CSRF check (header preferred, JSON body fallback)
+  let csrfToken = ctx.request.headers.get("x-csrf-token") || "";
+  if (!csrfToken) {
+    try {
+      const body = await ctx.request.body({ type: "json" }).value;
+      csrfToken = body?.csrf_token || "";
+    } catch {
+      // ignore parse errors; we'll fail below if token is missing
+    }
+  }
+
+  if (!csrfToken || csrfToken !== session.csrf_token) {
+    ctx.response.status = 403;
+    ctx.response.body = { error: "CSRF token validation failed" };
+    return;
+  }
+
+  let removed = 0;
+
+  // Remove completed/failed jobs and their files
+  for (const [jobId, job] of jobs.entries()) {
+    if (job.status === "completed" || job.status === "failed") {
+      try {
+        const folderPath = join(DOWNLOADS_DIR, jobId);
+        await Deno.stat(folderPath);
+        await Deno.remove(folderPath, { recursive: true });
+      } catch { /* folder may not exist */ }
+      jobs.delete(jobId);
+      removed++;
+    }
+  }
+
+  // Remove orphaned folders (not tracked in jobs map)
+  try {
+    for await (const entry of Deno.readDir(DOWNLOADS_DIR)) {
+      if (entry.isDirectory && !jobs.has(entry.name)) {
+        try {
+          await Deno.remove(join(DOWNLOADS_DIR, entry.name), { recursive: true });
+          removed++;
+        } catch { /* ignore */ }
+      }
+    }
+  } catch { /* downloads dir may not exist */ }
+
+  logInfo(`Manual cleanup: removed ${removed} items`);
+  ctx.response.body = { success: true, removed };
+});
+
 router.post("/search", async (ctx) => {
   try {
+    const config = await loadConfig();
+    const ip = getClientIp(ctx);
+    const limit = config.rate_limit_search_per_minute ?? 30;
+    if (!checkApiRateLimit(`search:${ip}`, limit, 60_000)) {
+      ctx.response.status = 429;
+      ctx.response.body = { error: "Rate limit exceeded" };
+      return;
+    }
+
     const body = await ctx.request.body({ type: "json" }).value as SearchRequest;
     const results = await searchYouTube(body.query);
     ctx.response.body = results;
@@ -1318,7 +2098,23 @@ router.post("/search", async (ctx) => {
 
 router.post("/download", async (ctx) => {
   try {
+    const config = await loadConfig();
+    const ip = getClientIp(ctx);
+    const limit = config.rate_limit_download_per_minute ?? 15;
+    if (!checkApiRateLimit(`download:${ip}`, limit, 60_000)) {
+      ctx.response.status = 429;
+      ctx.response.body = { error: "Rate limit exceeded" };
+      return;
+    }
+
     const body = await ctx.request.body({ type: "json" }).value as DownloadRequest;
+    const allowedDomains = config.allowed_download_domains || ["youtube.com", "youtu.be"];
+
+    if (!isAllowedDownloadUrl(body.url, allowedDomains)) {
+      ctx.response.status = 400;
+      ctx.response.body = { error: "URL domain not allowed" };
+      return;
+    }
     
     // Auto-detect playlists from URL
     // Playlists have 'list=' parameter: 
@@ -1344,6 +2140,9 @@ router.post("/download", async (ctx) => {
     };
     
     jobs.set(jobId, job);
+    await ensureDownloadDir(jobId);
+    await writeJobMetadata(job);
+    await writeJobStatus(job, true);
     
     logInfo(`New download request: ${jobId} - ${isPlaylist ? 'PLAYLIST' : 'SINGLE'} - ${body.url}`);
     
@@ -1353,12 +2152,14 @@ router.post("/download", async (ctx) => {
         logError(`Playlist download error: ${e}`);
         job.status = "failed";
         job.error = String(e);
+        writeJobStatus(job, true);
       });
     } else {
       downloadVideo(job).catch(e => {
         logError(`Video download error: ${e}`);
         job.status = "failed";
         job.error = String(e);
+        writeJobStatus(job, true);
       });
     }
     
@@ -1423,6 +2224,94 @@ router.get("/status/playlist/:jobId", (ctx) => {
   }
 });
 
+// Stream a file for inline playback (no download trigger, no cleanup)
+router.get("/stream/:jobId", async (ctx) => {
+  const jobId = ctx.params.jobId;
+  const job = jobs.get(jobId);
+
+  if (!job || job.status !== "completed") {
+    ctx.response.status = 404;
+    ctx.response.body = { error: "File not ready" };
+    return;
+  }
+
+  if (!job.file_path || !await exists(job.file_path)) {
+    const resolvedPath = await findMediaFileForJob(jobId, job.format_type);
+    if (!resolvedPath) {
+      ctx.response.status = 404;
+      ctx.response.body = { error: "File not found" };
+      return;
+    }
+    job.file_path = resolvedPath;
+    job.file_name = basename(resolvedPath);
+    await writeJobMetadata(job);
+  }
+
+  const filename = job.file_name || "download.mp3";
+  ctx.response.headers.set("Content-Disposition", `inline; filename="${encodeURIComponent(filename)}"`);
+
+  try {
+    await streamFileWithAbortHandling(ctx, job.file_path);
+  } catch (err) {
+    if (isClientAbortError(err)) return;
+    throw err;
+  }
+});
+
+// Stream a specific track from a playlist by index
+router.get("/stream/:jobId/:trackIndex", async (ctx) => {
+  const jobId = ctx.params.jobId;
+  const trackIndex = parseInt(ctx.params.trackIndex);
+  const job = jobs.get(jobId);
+
+  if (!job || job.status !== "completed" || !job.total_videos) {
+    ctx.response.status = 404;
+    ctx.response.body = { error: "Playlist not ready" };
+    return;
+  }
+
+  if (isNaN(trackIndex) || trackIndex < 0) {
+    ctx.response.status = 400;
+    ctx.response.body = { error: "Invalid track index" };
+    return;
+  }
+
+  const downloadDir = join(DOWNLOADS_DIR, jobId);
+  const ext = job.format_type === "audio" ? ".mp3" : ".mp4";
+  const files: string[] = [];
+
+  try {
+    for await (const entry of Deno.readDir(downloadDir)) {
+      if (entry.isFile && entry.name.endsWith(ext) && !entry.name.includes(".temp.") && !entry.name.includes(".part")) {
+        files.push(entry.name);
+      }
+    }
+  } catch {
+    ctx.response.status = 404;
+    ctx.response.body = { error: "Download folder not found" };
+    return;
+  }
+
+  files.sort();
+
+  if (trackIndex >= files.length) {
+    ctx.response.status = 404;
+    ctx.response.body = { error: "Track not found" };
+    return;
+  }
+
+  const filename = files[trackIndex];
+  const filePath = join(downloadDir, filename);
+  ctx.response.headers.set("Content-Disposition", `inline; filename="${encodeURIComponent(filename)}"`);
+
+  try {
+    await streamFileWithAbortHandling(ctx, filePath);
+  } catch (err) {
+    if (isClientAbortError(err)) return;
+    throw err;
+  }
+});
+
 router.get("/download/:jobId", async (ctx) => {
   const jobId = ctx.params.jobId;
   const job = jobs.get(jobId);
@@ -1434,9 +2323,15 @@ router.get("/download/:jobId", async (ctx) => {
   }
   
   if (!job.file_path || !await exists(job.file_path)) {
-    ctx.response.status = 404;
-    ctx.response.body = { error: "File not found" };
-    return;
+    const resolvedPath = await findMediaFileForJob(jobId, job.format_type);
+    if (!resolvedPath) {
+      ctx.response.status = 404;
+      ctx.response.body = { error: "File not found" };
+      return;
+    }
+    job.file_path = resolvedPath;
+    job.file_name = basename(resolvedPath);
+    await writeJobMetadata(job);
   }
   
   const filename = job.file_name || "download.mp3";
@@ -1485,21 +2380,65 @@ router.get("/download/playlist/:jobId", async (ctx) => {
 // APPLICATION
 // ============================================================================
 
-const app = new Application();
+const app = new Application({ logErrors: false });
 
 // 1. Security headers (MUST BE FIRST)
 app.use(securityHeadersMiddleware);
 
-// 2. CORS
-app.use(oakCors({
-  origin: "*",
-}));
+// 2. CORS (allowlist from config)
+app.use(async (ctx, next) => {
+  const origin = ctx.request.headers.get("Origin");
+  if (!origin) {
+    await next();
+    return;
+  }
+
+  const config = await loadConfig();
+  const allowed = config.cors_allowed_origins || [];
+  const isAllowed = allowed.includes(origin);
+
+  if (isAllowed) {
+    ctx.response.headers.set("Access-Control-Allow-Origin", origin);
+    ctx.response.headers.set("Vary", "Origin");
+    ctx.response.headers.set("Access-Control-Allow-Credentials", "true");
+    ctx.response.headers.set(
+      "Access-Control-Allow-Headers",
+      "Content-Type, X-CSRF-Token",
+    );
+    ctx.response.headers.set(
+      "Access-Control-Allow-Methods",
+      "GET,POST,PUT,DELETE,OPTIONS",
+    );
+  }
+
+  if (ctx.request.method === "OPTIONS") {
+    ctx.response.status = isAllowed ? 204 : 403;
+    return;
+  }
+
+  await next();
+});
+
+function isClientAbortError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)) || "";
+  const lower = msg.toLowerCase();
+  return (
+    lower.includes("connection closed before message completed") ||
+    lower.includes("error writing a body to connection") ||
+    lower.includes("bad resource id") ||
+    lower.includes("http: connection error") ||
+    lower.includes("error shutting down connection") ||
+    lower.includes("os error 10053") ||
+    lower.includes("os error 10054")
+  );
+}
 
 // 3. Error handler
 app.use(async (ctx, next) => {
   try {
     await next();
   } catch (err) {
+    if (isClientAbortError(err)) return;
     logError(`Unhandled error: ${err}`);
     ctx.response.status = 500;
     ctx.response.body = { error: "Internal server error" };
@@ -1518,6 +2457,17 @@ app.use(adminRouter.allowedMethods());
 app.use(router.routes());
 app.use(router.allowedMethods());
 
+// Suppress noisy client-abort errors (common during streaming)
+app.addEventListener("error", (evt) => {
+  const err = evt.error as Error | undefined;
+  if (isClientAbortError(err)) {
+    evt.preventDefault();
+    return;
+  }
+  logError(`Application error: ${err?.stack || err?.message || err}`);
+});
+
+
 // ============================================================================
 // STARTUP
 // ============================================================================
@@ -1534,22 +2484,13 @@ async function main() {
     await Deno.stat(CONFIG_FILE);
     logInfo(`✓ Config file: ${CONFIG_FILE}`);
   } catch {
+    const defaults = await loadConfig();
+  await saveConfig(defaults);
 
-    const defaultConfig = {
-      search_results: 40,
-      max_duration: 600,
-      max_file_size: 500,
-      id3_comment: "Downloaded via YouTube API",
-    };
-
-    await Deno.writeTextFile(
-      CONFIG_FILE,
-      JSON.stringify(defaultConfig, null, 2),
-    );
-
-    logInfo("✓ Config file created");
+  logInfo("✓ Config file created");
   }
 
+  await rebuildQueueFromDisk();
   await cleanupOrphanedFolders();
 
   periodicCleanup().catch(e =>

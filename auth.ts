@@ -1,4 +1,4 @@
-import { loadConfig, saveConfig, type Config } from "./config.ts";
+import { loadConfig, saveConfig } from "./config.ts";
 import { createSession, getSession, destroySession, type SessionData } from "./session.ts";
 
 export interface AuthCheckResponse {
@@ -20,7 +20,11 @@ export async function checkSetup(): Promise<AuthCheckResponse> {
   };
 }
 
-export async function setupPassword(password: string): Promise<AuthResponse> {
+export async function setupPassword(
+  password: string,
+  ip: string,
+  userAgent: string,
+): Promise<AuthResponse> {
   const config = await loadConfig();
   
   if (config.password_hash) {
@@ -42,7 +46,7 @@ export async function setupPassword(password: string): Promise<AuthResponse> {
   config.password_hash = passwordHash;
   await saveConfig(config);
   
-  const session = await createSession();
+  const session = await createSession(ip, userAgent);
   
   return {
     success: true,
@@ -79,6 +83,34 @@ export async function login(
     success: true,
     token: session.session_id,
   };
+}
+
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<AuthResponse> {
+  const config = await loadConfig();
+
+  if (!config.password_hash) {
+    return { success: false, message: "No password set. Use setup instead." };
+  }
+
+  const isValid = await verifyPassword(currentPassword, config.password_hash);
+  if (!isValid) {
+    return { success: false, message: "Current password is incorrect" };
+  }
+
+  if (!newPassword || newPassword.length < MIN_PASSWORD_LENGTH) {
+    return {
+      success: false,
+      message: `New password must be at least ${MIN_PASSWORD_LENGTH} characters`,
+    };
+  }
+
+  config.password_hash = await hashPassword(newPassword);
+  await saveConfig(config);
+
+  return { success: true, message: "Password changed successfully" };
 }
 
 export async function logout(sessionId: string): Promise<void> {

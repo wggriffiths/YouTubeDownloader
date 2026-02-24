@@ -14,7 +14,19 @@ export interface RateLimitData {
   attempts: number[];
 }
 
-const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
+import { loadConfig } from "./config.ts";
+
+let SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes default
+
+/** Reload timeout from config. Called periodically and on init. */
+async function refreshTimeout(): Promise<void> {
+  try {
+    const config = await loadConfig();
+    SESSION_TIMEOUT = (config.session_timeout || 30) * 60 * 1000;
+  } catch { /* keep current value */ }
+}
+refreshTimeout();
+setInterval(refreshTimeout, 60000);
 const MAX_LOGIN_ATTEMPTS = 5;
 const RATE_LIMIT_WINDOW = 15 * 60 * 1000; // 15 minutes
 const COOKIE_NAME = "yt_session";
@@ -22,6 +34,13 @@ const COOKIE_NAME = "yt_session";
 // In-memory storage (production should use Redis or similar)
 const sessions = new Map<string, SessionData>();
 const rateLimits = new Map<string, RateLimitData>();
+
+function normalizeIp(ip: string): string {
+  if (!ip) return "unknown";
+  if (ip === "::1") return "127.0.0.1";
+  if (ip.startsWith("::ffff:")) return ip.slice(7);
+  return ip;
+}
 
 function generateSessionId(): string {
   return crypto.randomUUID();
@@ -35,7 +54,8 @@ function generateCsrfToken(): string {
     .join("");
 }
 
-export async function createSession(ip = "unknown", userAgent = "unknown"): Promise<SessionData> {
+export function createSession(ip = "unknown", userAgent = "unknown"): SessionData {
+  const normalizedIp = normalizeIp(ip);
   const sessionId = generateSessionId();
   const csrfToken = generateCsrfToken();
   
@@ -43,7 +63,7 @@ export async function createSession(ip = "unknown", userAgent = "unknown"): Prom
     session_id: sessionId,
     created_at: Date.now(),
     last_activity: Date.now(),
-    user_ip: ip,
+    user_ip: normalizedIp,
     user_agent: userAgent,
     csrf_token: csrfToken,
   };
@@ -53,11 +73,12 @@ export async function createSession(ip = "unknown", userAgent = "unknown"): Prom
   return session;
 }
 
-export async function getSession(
+export function getSession(
   sessionId: string,
   ip: string,
   userAgent: string
-): Promise<SessionData | null> {
+): SessionData | null {
+  const normalizedIp = normalizeIp(ip);
   const session = sessions.get(sessionId);
   
   if (!session) {
@@ -71,7 +92,7 @@ export async function getSession(
   }
   
   // Verify IP
-  if (session.user_ip !== ip) {
+  if (normalizeIp(session.user_ip) !== normalizedIp) {
     sessions.delete(sessionId);
     return null;
   }
@@ -89,7 +110,7 @@ export async function getSession(
   return session;
 }
 
-export async function destroySession(sessionId: string): Promise<void> {
+export function destroySession(sessionId: string): void {
   sessions.delete(sessionId);
 }
 
@@ -101,7 +122,7 @@ export function setSessionCookie(ctx: Context, sessionId: string, secure = true)
     secure: secure,
     sameSite: "Strict",
     path: "/",
-    maxAge: SESSION_TIMEOUT / 1000,
+    maxAge: Math.floor(SESSION_TIMEOUT / 1000),
   });
 }
 

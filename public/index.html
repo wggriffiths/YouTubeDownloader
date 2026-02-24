@@ -315,62 +315,6 @@
             border: none;
         }
         
-        .modal-title {
-            font-size: 1.5rem;
-            font-weight: 700;
-            margin-bottom: 1rem;
-        }
-        
-        .modal-status {
-            color: var(--text-secondary);
-            margin-bottom: 1.5rem;
-        }
-        
-        .playlist-progress {
-            text-align: center;
-            margin-bottom: 1rem;
-        }
-
-        .track-info {
-            font-size: 1rem;
-            font-weight: 600;
-            margin-bottom: 0.5rem;
-        }
-
-        .current-track {
-            font-size: 0.9rem;
-            color: var(--accent-cyan);
-            margin-top: 0.5rem;
-            font-style: italic;
-        }
-
-        .file-count {
-            font-size: 0.9rem;
-            color: var(--text-secondary);
-            margin-top: 0.5rem;
-        }
-
-        .success {
-            color: var(--success-green);
-            font-weight: 600;
-            font-size: 1.1rem;
-        }
-        
-        .progress-bar {
-            height: 8px;
-            background: var(--bg-card);
-            border-radius: 1rem;
-            overflow: hidden;
-            margin-bottom: 1.5rem;
-        }
-        
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, var(--accent-cyan), var(--accent-purple));
-            width: 0%;
-            transition: width 0.3s;
-        }
-        
         .offline-notice {
             text-align: center;
             padding: 3rem;
@@ -383,25 +327,138 @@
         }
         
         @media (max-width: 768px) {
-            .result-item {
-                flex-direction: column;
-            }
-            
-            .result-thumb {
-                width: 100%;
-                height: auto;
-            }
-            
-            .result-actions {
-                width: 100%;
-                flex-direction: column;
-            }
-            
-            .btn-play,
-            .btn-download {
-                width: 100%;
-            }
+            .container { padding: 1rem; }
+            .hero { padding: 1.5rem 0; }
+            .hero-title { font-size: 1.75rem; }
+            .hero-subtitle { font-size: 0.95rem; }
+            .search-section { padding: 1rem; margin: 1rem 0; border-radius: 0.75rem; }
+            .search-form { flex-direction: column; gap: 0.75rem; }
+            .search-input { padding: 0.75rem 1rem; }
+            .btn { padding: 0.75rem 1.5rem; width: 100%; }
+            .format-options { flex-direction: column; gap: 0.75rem; }
+            .format-group { width: 100%; }
+            .format-group select { flex: 1; }
+            .result-item { flex-direction: column; padding: 1rem; gap: 1rem; }
+            .result-thumb { width: 100%; height: auto; }
+            .result-actions { width: 100%; flex-direction: column; }
+            .btn-play, .btn-download { width: 100%; text-align: center; }
+            .queue-popup { width: calc(100vw - 1rem); right: 0.5rem; left: 0.5rem; max-height: 60vh; }
+            .queue-video-panel { right: 0.5rem; left: 0.5rem; width: calc(100vw - 1rem); top: auto; bottom: 0.75rem; }
+            .queue-icon-wrap { top: 0.75rem; right: 0.75rem; }
+            .modal-content { width: 95%; padding: 1.5rem; }
+            .modal-content.video-player { width: 95%; }
         }
+
+        /* ── Queue icon + popup (queue.js) ─────────────────────── */
+        .queue-icon-wrap { position: fixed; top: 1.25rem; right: 1.5rem; z-index: 9000; }
+        .queue-icon {
+            width: 40px; height: 40px; border-radius: 50%; background: var(--bg-card);
+            border: 1px solid var(--border-subtle); display: flex; align-items: center;
+            justify-content: center; cursor: pointer; transition: all 0.2s ease; position: relative;
+        }
+        .queue-icon:hover { border-color: var(--accent-cyan); }
+        .queue-icon svg { width: 20px; height: 20px; fill: var(--text-secondary); transition: fill 0.2s; }
+        .queue-icon:hover svg { fill: var(--accent-cyan); }
+        .queue-badge {
+            position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px;
+            background: var(--accent-cyan); color: #0f1419; font-size: 0.7rem; font-weight: 700;
+            border-radius: 9px; display: flex; align-items: center; justify-content: center;
+            padding: 0 4px; line-height: 1;
+        }
+        .queue-popup {
+            position: fixed; top: 60px; right: 1.5rem; width: 380px; max-height: 480px;
+            background: var(--bg-secondary); border: 1px solid var(--border-subtle);
+            border-radius: 0.75rem; box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+            z-index: 8999; display: none; flex-direction: column; overflow: hidden;
+        }
+        .queue-video-panel {
+            position: fixed; top: 60px; right: calc(1.5rem + 380px + 0.75rem); width: 420px;
+            background: var(--bg-secondary); border: 1px solid var(--border-subtle);
+            border-radius: 0.75rem; box-shadow: 0 12px 40px rgba(0,0,0,0.5);
+            z-index: 8999; display: none; overflow: hidden;
+        }
+        .queue-video-panel.open { display: block; }
+        .qv-head {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--border-subtle);
+            color: var(--accent-cyan); font-weight: 700; font-size: 0.85rem;
+        }
+        .qv-title {
+            flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-right: 0.5rem;
+        }
+        .qv-close {
+            width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--border-subtle);
+            background: var(--bg-card); color: var(--text-secondary); cursor: pointer;
+        }
+        .qv-close:hover { color: var(--text-primary); border-color: var(--accent-cyan); }
+        .qv-video { width: 100%; height: 236px; display: block; background: #000; }
+        .queue-backdrop {
+            display: none; position: fixed; inset: 0; z-index: 8998;
+            background: rgba(0,0,0,0.35); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+        }
+        .queue-backdrop.open { display: block; }
+        .queue-popup.open { display: flex; }
+        .qp-head { padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-subtle); font-weight: 700; font-size: 0.95rem; color: var(--accent-cyan); }
+        .qp-list { overflow-y: auto; max-height: 420px; padding: 0.5rem; }
+        .qp-empty { text-align: center; color: var(--text-secondary); padding: 2rem 0; font-size: 0.9rem; }
+
+        .qp-item { padding: 0.6rem 0.65rem; border-radius: 0.5rem; transition: background 0.15s; }
+        .qp-item:hover { background: rgba(148,163,184,0.05); }
+        .qp-item + .qp-item { border-top: 1px solid rgba(148,163,184,0.08); }
+
+        .qp-row { display: flex; align-items: center; gap: 0.6rem; }
+        .qp-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+        .qp-dot.qp-pending    { background: var(--text-secondary); }
+        .qp-dot.qp-processing, .qp-dot.qp-playlist { background: var(--accent-cyan); animation: qp-pulse 1.4s infinite; }
+        .qp-dot.qp-completed  { background: var(--success-green); }
+        .qp-dot.qp-failed     { background: var(--error-red); }
+        .qp-dot.qp-interrupted { background: var(--accent-amber); }
+        @keyframes qp-pulse { 0%,100%{ opacity:1; } 50%{ opacity:0.3; } }
+
+        .qp-name { flex: 1; font-size: 0.85rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .qp-status { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; flex-shrink: 0; padding: 0.15rem 0.45rem; border-radius: 0.25rem; }
+        .qp-status.qp-pending { color: var(--text-secondary); }
+        .qp-status.qp-processing, .qp-status.qp-playlist { color: #fff; background: rgba(34,211,238,0.2); }
+        .qp-status.qp-completed { color: #fff; background: rgba(16,185,129,0.2); }
+        .qp-status.qp-failed { color: #fff; background: rgba(239,68,68,0.2); }
+        .qp-status.qp-interrupted { color: #fff; background: rgba(245,158,11,0.2); }
+
+        .qp-track { height: 4px; background: rgba(148,163,184,0.12); border-radius: 2px; margin: 0.35rem 0 0.2rem; overflow: hidden; }
+        .qp-bar { height: 100%; border-radius: 2px; transition: width 0.35s ease; background: linear-gradient(90deg, var(--accent-cyan), #7c3aed); }
+        .qp-bar-ok  { background: var(--success-green); }
+        .qp-bar-err { background: var(--error-red); }
+
+        .qp-meta { font-size: 0.75rem; color: var(--text-secondary); }
+        .qp-err  { font-size: 0.75rem; color: var(--error-red); margin-top: 0.15rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        .qp-actions { display: flex; gap: 0.4rem; margin-top: 0.35rem; }
+        .qp-btn {
+            padding: 0.25rem 0.6rem; border-radius: 0.35rem; font-size: 0.75rem; font-weight: 600;
+            cursor: pointer; border: 1px solid var(--border-subtle); background: var(--bg-card);
+            color: var(--text-secondary); transition: all 0.2s; text-decoration: none; display: inline-block;
+        }
+        .qp-btn:hover { color: var(--text-primary); border-color: var(--accent-cyan); }
+        .qp-btn-dl  { background: linear-gradient(135deg, var(--success-green), #059669); color: #fff; border: none; }
+        .qp-btn-dl:hover { box-shadow: 0 3px 10px rgba(16,185,129,0.3); }
+        .qp-btn-cancel { color: var(--error-red); }
+        .qp-btn-cancel:hover { border-color: var(--error-red); }
+        .qp-btn-rm:hover { border-color: var(--error-red); color: var(--error-red); }
+        .qp-btn-resume { color: var(--accent-amber); }
+        .qp-btn-resume:hover { border-color: var(--accent-amber); color: var(--accent-amber); }
+
+        /* ── Playback controls ─────────────────────────────────── */
+        .qp-play-wrap { display: flex; align-items: center; gap: 0.35rem; margin-top: 0.35rem; }
+        .qp-play-btn {
+            width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--border-subtle);
+            background: var(--bg-card); color: var(--text-secondary); cursor: pointer;
+            display: flex; align-items: center; justify-content: center; transition: all 0.2s;
+            padding: 0; flex-shrink: 0;
+        }
+        .qp-play-btn:hover { border-color: var(--accent-cyan); color: var(--accent-cyan); }
+        .qp-play-btn.playing { border-color: var(--accent-cyan); color: var(--accent-cyan); background: rgba(34,211,238,0.1); }
+        .qp-play-btn svg { width: 14px; height: 14px; fill: currentColor; }
+        .qp-play-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+        .qp-now-playing { font-size: 0.7rem; color: var(--accent-cyan); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     </style>
 </head>
 <body>
@@ -452,15 +509,26 @@
         <div id="results"></div>
     </div>
 
-    <div id="downloadModal" class="modal">
-        <div class="modal-content">
-            <h3 class="modal-title" id="modalTitle">Downloading...</h3>
-            <p class="modal-status" id="modalStatus">Preparing download...</p>
-            <div class="progress-bar">
-                <div class="progress-fill" id="progressFill"></div>
-            </div>
-            <div id="downloadLink"></div>
+    <!-- Queue icon (fixed top-right) -->
+    <div class="queue-icon-wrap" id="queueIcon">
+        <div class="queue-icon">
+            <svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+            <div class="queue-badge" id="queueBadge" style="display:none">0</div>
         </div>
+    </div>
+
+    <!-- Queue backdrop + popup panel -->
+    <div class="queue-backdrop" id="queueBackdrop"></div>
+    <div class="queue-popup" id="queuePopup">
+        <div class="qp-head">Download Queue</div>
+        <div class="qp-list" id="queueItems"></div>
+    </div>
+    <div class="queue-video-panel" id="queueVideoPanel">
+        <div class="qv-head">
+            <div class="qv-title" id="queueVideoTitle">Video Player</div>
+            <button class="qv-close" id="queueVideoClose">&times;</button>
+        </div>
+        <video id="queueVideo" class="qv-video" controls preload="metadata"></video>
     </div>
 
     <div id="videoModal" class="modal">
@@ -481,11 +549,6 @@
         const searchInput = document.getElementById('searchInput');
         const searchBtn = document.getElementById('searchBtn');
         const resultsDiv = document.getElementById('results');
-        const downloadModal = document.getElementById('downloadModal');
-        const modalTitle = document.getElementById('modalTitle');
-        const modalStatus = document.getElementById('modalStatus');
-        const progressFill = document.getElementById('progressFill');
-        const downloadLink = document.getElementById('downloadLink');
         const formatType = document.getElementById('formatType');
         const videoQuality = document.getElementById('videoQuality');
         const qualitySelector = document.getElementById('qualitySelector');
@@ -493,8 +556,6 @@
         const videoTitle = document.getElementById('videoTitle');
         const videoPlayer = document.getElementById('videoPlayer');
         const closeVideo = document.getElementById('closeVideo');
-
-        let statusCheckInterval = null;
 
         formatType.addEventListener('change', () => {
             qualitySelector.style.display = formatType.value === 'video' ? 'flex' : 'none';
@@ -630,14 +691,8 @@
         }
 
         async function startDownload(url, title) {
-            downloadModal.classList.add('show');
-            modalTitle.textContent = title;
-            modalStatus.textContent = 'Starting download...';
-            progressFill.style.width = '0%';
-            downloadLink.innerHTML = '';
-
             try {
-                const response = await fetch(`${API_URL}/download`, {
+                await fetch(`${API_URL}/download`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -646,116 +701,10 @@
                         quality: videoQuality.value
                     })
                 });
-
-                const data = await response.json();
-
-                if (data.job_id) {
-                    if (data.status === 'playlist') {
-                        checkPlaylistStatus(data.job_id);
-                    } else {
-                        checkStatus(data.job_id);
-                    }
-                } else {
-                    modalStatus.textContent = 'Failed to start download';
-                }
             } catch (error) {
-                modalStatus.textContent = 'Error: ' + error.message;
+                console.error('Download request failed:', error);
             }
         }
-
-        function checkStatus(jobId) {
-            if (statusCheckInterval) clearInterval(statusCheckInterval);
-
-            statusCheckInterval = setInterval(async () => {
-                try {
-                    const response = await fetch(`${API_URL}/status/${jobId}`);
-                    const data = await response.json();
-
-                    if (data.status === 'processing') {
-                        modalStatus.textContent = 'Downloading and converting...';
-                        progressFill.style.width = '50%';
-                    } else if (data.status === 'completed') {
-                        clearInterval(statusCheckInterval);
-                        modalStatus.textContent = 'Download complete!';
-                        progressFill.style.width = '100%';
-                        downloadLink.innerHTML = `
-                            <a href="${API_URL}/download/${jobId}" class="btn btn-primary" download>
-                                Download ${formatType.value === 'video' ? 'Video' : 'MP3'}
-                            </a>
-                        `;
-                    } else if (data.status === 'failed') {
-                        clearInterval(statusCheckInterval);
-                        modalStatus.textContent = 'Download failed: ' + (data.error || 'Unknown error');
-                        progressFill.style.width = '0%';
-                    }
-                } catch (error) {
-                    clearInterval(statusCheckInterval);
-                    modalStatus.textContent = 'Error checking status';
-                }
-            }, 2000);
-        }
-
-        function checkPlaylistStatus(jobId) {
-            if (statusCheckInterval) clearInterval(statusCheckInterval);
-
-            statusCheckInterval = setInterval(async () => {
-                try {
-                    const response = await fetch(`${API_URL}/status/playlist/${jobId}`);
-                    const data = await response.json();
-
-                    if (data.status === 'playlist') {
-                        let statusHTML = '<div class="playlist-progress">';
-                        
-                        if (data.current_video && data.total_videos) {
-                            statusHTML += `<div class="track-info">Track ${data.current_video} of ${data.total_videos}</div>`;
-                        }
-                        
-                        if (data.current_title) {
-                            statusHTML += `<div class="current-track">"${data.current_title}"</div>`;
-                        }
-                        
-                        statusHTML += '</div>';
-                        modalStatus.innerHTML = statusHTML;
-                        
-                        if (data.total_videos > 0) {
-                            const progress = (data.current_video / data.total_videos) * 100;
-                            progressFill.style.width = `${progress}%`;
-                        }
-                    } 
-                    else if (data.status === 'completed') {
-                        clearInterval(statusCheckInterval);
-                        const fileCount = data.total_videos || 0;
-                        
-                        modalStatus.innerHTML = `
-                            <div class="success">✓ Download Complete!</div>
-                            <div class="file-count">${fileCount} file${fileCount !== 1 ? 's' : ''} ready</div>
-                        `;
-                        
-                        progressFill.style.width = '100%';
-                        
-                        downloadLink.innerHTML = `
-                            <a href="${API_URL}/download/playlist/${jobId}" class="btn btn-primary" download>
-                                Download ZIP (${fileCount} files)
-                            </a>
-                        `;
-                    } 
-                    else if (data.status === 'failed') {
-                        clearInterval(statusCheckInterval);
-                        modalStatus.textContent = 'Download failed: ' + (data.error || 'Unknown error');
-                        progressFill.style.width = '0%';
-                    }
-                } catch (error) {
-                    console.error('Status check failed:', error);
-                }
-            }, 1000);
-        }
-
-        downloadModal.addEventListener('click', (e) => {
-            if (e.target === downloadModal) {
-                downloadModal.classList.remove('show');
-                if (statusCheckInterval) clearInterval(statusCheckInterval);
-            }
-        });
 
         function formatDuration(seconds) {
             const mins = Math.floor(seconds / 60);
@@ -768,6 +717,8 @@
             div.textContent = text;
             return div.innerHTML;
         }
+
     </script>
+    <script src="/js/queue.js"></script>
 </body>
 </html>
